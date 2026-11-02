@@ -56,3 +56,17 @@ name = "android.permission.INTERNET"
 
 [[package.metadata.android.uses_permission]]
 name = "android.permission.READ_MEDIA_AUDIO"
+
+[package.metadata.deb]
+name = "aria-player"
+maintainer = "magi8101"
+copyright = "magi8101"
+section = "sound"
+priority = "optional"
+depends = "$auto"
+recommends = "ffmpeg"
+extended-description = "Touch-first music player for local files and streaming from YouTube, YouTube Music and JioSaavn."
+assets = [
+    ["target/release/aria", "usr/bin/", "755"],
+    ["packaging/aria.desktop", "usr/share/applications/", "644"],
+]

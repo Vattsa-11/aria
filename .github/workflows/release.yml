@@ -3,9 +3,18 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish a GitHub release (needs the tag name below)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
+
+env:
+  YTDLP_VERSION: "2026.10.26"
 
 jobs:
   build:
@@ -14,62 +23,127 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            asset: aria-windows-x86_64.exe
+            label: windows-x86_64
             binary: target/release/aria.exe
+            raw: aria-windows-x86_64.exe
+            ytdlp_asset: yt-dlp.exe
+            ytdlp_name: yt-dlp.exe
           - os: ubuntu-latest
-            asset: aria-linux-x86_64
+            label: linux-x86_64
             binary: target/release/aria
+            raw: aria-linux-x86_64
+            ytdlp_asset: yt-dlp_linux
+            ytdlp_name: yt-dlp
           - os: macos-latest
-            asset: aria-macos-aarch64
+            label: macos-aarch64
             binary: target/release/aria
+            raw: aria-macos-aarch64
+            ytdlp_asset: yt-dlp_macos
+            ytdlp_name: yt-dlp
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
       - name: Tag must match Cargo.toml version
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           version=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)"/\1/')
           test "v$version" = "${GITHUB_REF_NAME}" || { echo "Cargo.toml is $version but tag is ${GITHUB_REF_NAME}"; exit 1; }
+
       - name: Linux system libraries
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libdbus-1-dev libxkbcommon-dev libwayland-dev libxcb1-dev libgl1-mesa-dev pkg-config
+
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+
       - name: Test
         env:
           ARIA_DATA_DIR: ${{ runner.temp }}/aria-test-data
         run: cargo test --release
+
       - name: Build
         run: cargo build --release
-      - name: Stage asset and checksum
+
+      - name: Download and verify yt-dlp
         shell: bash
         run: |
-          mkdir dist
-          cp "${{ matrix.binary }}" "dist/${{ matrix.asset }}"
-          cd dist
-          if command -v sha256sum >/dev/null; then sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"; else shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"; fi
-      - name: Linux tarball
+          base="https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}"
+          curl -fsSL --retry 3 -o ytdlp-download "$base/${{ matrix.ytdlp_asset }}"
+          curl -fsSL --retry 3 -o SHA2-256SUMS "$base/SHA2-256SUMS"
+          expected=$(grep " ${{ matrix.ytdlp_asset }}\$" SHA2-256SUMS | cut -d' ' -f1)
+          if command -v sha256sum >/dev/null; then actual=$(sha256sum ytdlp-download | cut -d' ' -f1); else actual=$(shasum -a 256 ytdlp-download | cut -d' ' -f1); fi
+          test -n "$expected" || { echo "no checksum listed for ${{ matrix.ytdlp_asset }}"; exit 1; }
+          test "$expected" = "$actual" || { echo "yt-dlp checksum mismatch: $expected vs $actual"; exit 1; }
+          chmod +x ytdlp-download
+
+      - name: Stage files
+        shell: bash
+        run: |
+          mkdir -p dist bundle
+          cp "${{ matrix.binary }}" "dist/${{ matrix.raw }}"
+          cp "${{ matrix.binary }}" bundle/
+          cp ytdlp-download "bundle/${{ matrix.ytdlp_name }}"
+          if [ "$RUNNER_OS" = "Linux" ]; then cp packaging/aria.desktop bundle/; fi
+
+      - name: Windows zip
+        if: runner.os == 'Windows'
+        shell: bash
+        run: (cd bundle && 7z a -tzip "../dist/aria-windows-x86_64.zip" .)
+
+      - name: Unix tarball
+        if: runner.os != 'Windows'
+        shell: bash
+        run: (cd bundle && tar czf "../dist/aria-${{ matrix.label }}.tar.gz" .)
+
+      - name: Windows MSI
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          dotnet tool install --global wix --version 4.0.5
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          version=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)"/\1/')
+          wix build packaging/windows/aria.wxs -arch x64 -sval \
+            -d "Version=$version" \
+            -d "ExePath=$(pwd)/bundle/aria.exe" \
+            -d "YtdlpPath=$(pwd)/bundle/yt-dlp.exe" \
+            -o dist/aria-windows-x86_64.msi
+
+      - name: Debian package
         if: runner.os == 'Linux'
         run: |
-          mkdir -p aria-linux-x86_64
-          cp target/release/aria packaging/aria.desktop aria-linux-x86_64/
-          tar czf dist/aria-linux-x86_64.tar.gz aria-linux-x86_64
-          (cd dist && sha256sum aria-linux-x86_64.tar.gz > aria-linux-x86_64.tar.gz.sha256)
+          cargo install cargo-deb --locked
+          cargo deb --no-build --output dist/aria-linux-amd64.deb
+
+      - name: Checksums
+        shell: bash
+        run: |
+          cd dist
+          for file in *; do
+            case "$file" in *.sha256) continue;; esac
+            if command -v sha256sum >/dev/null; then sha256sum "$file" > "$file.sha256"; else shasum -a 256 "$file" > "$file.sha256"; fi
+          done
+          ls -la
+
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset }}
+          name: aria-${{ matrix.label }}
           path: dist/*
 
   publish:
     needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      - name: Combined checksum list
+        run: cd dist && cat *.sha256 > SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
