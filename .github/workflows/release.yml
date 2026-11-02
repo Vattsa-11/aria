@@ -106,7 +106,7 @@ jobs:
           dotnet tool install --global wix --version 4.0.5
           export PATH="$PATH:$HOME/.dotnet/tools"
           version=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)"/\1/')
-          wix build packaging/windows/aria.wxs -arch x64 -sval \
+          wix build packaging/windows/aria.wxs -arch x64 \
             -d "Version=$version" \
             -d "ExePath=$(pwd)/bundle/aria.exe" \
             -d "YtdlpPath=$(pwd)/bundle/yt-dlp.exe" \
