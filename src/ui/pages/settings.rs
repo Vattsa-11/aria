@@ -469,6 +469,48 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
                 }
             });
 
+            ui.add_space(12.0);
+
+            section(ui, &pal, "YouTube sign-in");
+            card(ui, &pal, |ui| {
+                ui.label(RichText::new("Use my browser's YouTube login").size(16.0).color(pal.text));
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(
+                        "Off by default. Lets yt-dlp read the login saved in the browser you pick, so Mixes match your browser and \"sign in\" blocks go away. yt-dlp can then act as that signed-in account, and automated use can get an account flagged, so a separate account is safest. Firefox works best; recent Chrome, Edge and Brave on Windows often cannot be read.",
+                    )
+                    .size(12.5)
+                    .color(pal.muted),
+                );
+                ui.add_space(10.0);
+                let current = app.settings.ytdlp_cookie_browser.clone();
+                let mut chosen = current.clone();
+                ui.horizontal_wrapped(|ui| {
+                    if crate::ui::widgets::pill_button(ui, "Off", current.is_none(), accent, &pal) {
+                        chosen = None;
+                    }
+                    for (id, label) in crate::ytdlp::browsers_here() {
+                        if crate::ui::widgets::pill_button(ui, label, current.as_deref() == Some(id), accent, &pal) {
+                            chosen = Some(id.to_string());
+                        }
+                    }
+                });
+                if chosen != current {
+                    crate::ytdlp::set_cookie_browser(chosen.as_deref());
+                    app.settings.ytdlp_cookie_browser = chosen;
+                    app.persist(true);
+                    app.touch_settings();
+                }
+                if let Some(error) = crate::ytdlp::cookie_error() {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(format!("Could not read that browser's login, continuing signed out: {error}"))
+                            .size(12.0)
+                            .color(egui::Color32::from_rgb(220, 68, 92)),
+                    );
+                }
+            });
+
             ui.add_space(24.0);
         });
 }

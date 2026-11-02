@@ -144,7 +144,105 @@ pub fn version() -> Option<String> {
     version_of(&discover()?)
 }
 
+pub const BROWSERS: [(&str, &str); 8] = [
+    ("firefox", "Firefox"),
+    ("chrome", "Chrome"),
+    ("edge", "Edge"),
+    ("brave", "Brave"),
+    ("chromium", "Chromium"),
+    ("opera", "Opera"),
+    ("vivaldi", "Vivaldi"),
+    ("safari", "Safari"),
+];
+
+pub fn browsers_here() -> Vec<(&'static str, &'static str)> {
+    BROWSERS
+        .into_iter()
+        .filter(|(id, _)| *id != "safari" || cfg!(target_os = "macos"))
+        .collect()
+}
+
+static COOKIE_BROWSER: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+static COOKIE_ERROR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+pub fn set_cookie_browser(browser: Option<&str>) {
+    let valid = browser.filter(|id| BROWSERS.iter().any(|(known, _)| known == id));
+    *COOKIE_BROWSER.lock().unwrap_or_else(|err| err.into_inner()) = valid.map(str::to_string);
+    *COOKIE_ERROR.lock().unwrap_or_else(|err| err.into_inner()) = None;
+}
+
+pub fn cookie_browser() -> Option<String> {
+    COOKIE_BROWSER.lock().unwrap_or_else(|err| err.into_inner()).clone()
+}
+
+pub fn cookie_error() -> Option<String> {
+    COOKIE_ERROR.lock().unwrap_or_else(|err| err.into_inner()).clone()
+}
+
+fn record_cookie_error(message: Option<String>) {
+    *COOKIE_ERROR.lock().unwrap_or_else(|err| err.into_inner()) = message;
+}
+
+pub fn cookie_args(browser: Option<&str>) -> Vec<String> {
+    match browser.filter(|id| BROWSERS.iter().any(|(known, _)| known == id)) {
+        Some(id) => vec!["--cookies-from-browser".to_string(), id.to_string()],
+        None => Vec::new(),
+    }
+}
+
+pub fn extracted_no_cookies(stderr: &str) -> bool {
+    stderr.to_ascii_lowercase().contains("extracted 0 cookies")
+}
+
+pub fn is_cookie_failure(stderr: &str) -> bool {
+    let text = stderr.to_ascii_lowercase();
+    text.contains("cookie")
+        && ["could not", "failed", "decrypt", "locked", "unable", "not find", "no such file", "permission"]
+            .iter()
+            .any(|marker| text.contains(marker))
+}
+
+fn first_lines(stderr: &str) -> String {
+    stderr
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub fn run(args: &[&str]) -> Result<String, String> {
+    let browser = cookie_browser();
+    if browser.is_some() {
+        let mut with_cookies: Vec<String> = cookie_args(browser.as_deref());
+        with_cookies.extend(args.iter().map(|arg| arg.to_string()));
+        let refs: Vec<&str> = with_cookies.iter().map(String::as_str).collect();
+        match run_full(&refs) {
+            Err(message) if is_cookie_failure(&message) => {
+                crate::logs::error(&format!("browser cookies unavailable, continuing signed out: {message}"));
+                record_cookie_error(Some(message));
+            }
+            Ok((stdout, stderr)) => {
+                if extracted_no_cookies(&stderr) {
+                    let note = first_lines(&stderr);
+                    crate::logs::error(&format!("browser login not readable, signed out: {note}"));
+                    record_cookie_error(Some(note));
+                } else {
+                    record_cookie_error(None);
+                }
+                return Ok(stdout);
+            }
+            Err(message) => return Err(message),
+        }
+    }
+    run_plain(args)
+}
+
+fn run_plain(args: &[&str]) -> Result<String, String> {
+    run_full(args).map(|(stdout, _)| stdout)
+}
+
+fn run_full(args: &[&str]) -> Result<(String, String), String> {
     let binary = discover().ok_or_else(|| "yt-dlp not found".to_string())?;
     let output = crate::proc::command(&binary)
         .args(args)
@@ -152,12 +250,7 @@ pub fn run(args: &[&str]) -> Result<String, String> {
         .map_err(|err| format!("Failed to run yt-dlp: {err}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let summary = stderr
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .take(2)
-            .collect::<Vec<_>>()
-            .join(" ");
+        let summary = first_lines(&stderr);
         let message = if summary.is_empty() {
             "yt-dlp failed".to_string()
         } else {
@@ -165,7 +258,10 @@ pub fn run(args: &[&str]) -> Result<String, String> {
         };
         return Err(message);
     }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok((
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+    ))
 }
 
 fn safe_duration(value: Option<f64>) -> Option<Duration> {
@@ -447,8 +543,29 @@ pub fn download_audio(
 ) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir).map_err(|err| err.to_string())?;
     let binary = discover().ok_or_else(|| "yt-dlp not found".to_string())?;
-    let args = download_args(dir, stem, url);
-    let mut child = crate::proc::command(&binary)
+    let browser = cookie_browser();
+    let attempt = download_with(&binary, dir, stem, url, browser.as_deref(), &cancel);
+    match (attempt, browser) {
+        (Err(message), Some(_)) if message != "Cancelled" => {
+            crate::logs::error("download with browser cookies failed, retrying signed out");
+            record_cookie_error(Some(message));
+            download_with(&binary, dir, stem, url, None, &cancel)
+        }
+        (result, _) => result,
+    }
+}
+
+fn download_with(
+    binary: &std::path::Path,
+    dir: &std::path::Path,
+    stem: &str,
+    url: &str,
+    browser: Option<&str>,
+    cancel: &Arc<AtomicBool>,
+) -> Result<PathBuf, String> {
+    let mut args = cookie_args(browser);
+    args.extend(download_args(dir, stem, url));
+    let mut child = crate::proc::command(binary)
         .args(&args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -588,5 +705,52 @@ mod discovery_tests {
         assert_eq!(pick_newest(vec![]), None);
         let nightly = (PathBuf::from("/n/yt-dlp"), Some("2025.10.22.232958".to_string()));
         assert_eq!(pick_newest(vec![new.clone(), nightly.clone()]), Some(nightly.0));
+    }
+}
+
+#[cfg(test)]
+mod cookie_tests {
+    use super::*;
+
+    #[test]
+    fn only_known_browsers_reach_the_command_line() {
+        assert_eq!(cookie_args(Some("firefox")), vec!["--cookies-from-browser", "firefox"]);
+        assert!(cookie_args(None).is_empty());
+        assert!(cookie_args(Some("firefox --exec calc")).is_empty());
+        assert!(cookie_args(Some("../../etc")).is_empty());
+        assert!(cookie_args(Some("")).is_empty());
+    }
+
+    #[test]
+    fn setting_an_unknown_browser_turns_cookies_off() {
+        set_cookie_browser(Some("brave"));
+        assert_eq!(cookie_browser().as_deref(), Some("brave"));
+        set_cookie_browser(Some("not-a-browser"));
+        assert_eq!(cookie_browser(), None);
+        set_cookie_browser(None);
+        assert_eq!(cookie_browser(), None);
+    }
+
+    #[test]
+    fn recognises_cookie_read_failures() {
+        assert!(is_cookie_failure("ERROR: could not find firefox cookies database in /home/u/.mozilla"));
+        assert!(is_cookie_failure("ERROR: Failed to decrypt cookie (AES-GCM)"));
+        assert!(is_cookie_failure("ERROR: Could not copy Chrome cookie database. cookies file is locked"));
+        assert!(!is_cookie_failure("ERROR: [youtube] abc: Video unavailable"));
+        assert!(!is_cookie_failure("ERROR: Requested format is not available"));
+    }
+
+    #[test]
+    fn notices_when_yt_dlp_silently_got_no_cookies() {
+        assert!(extracted_no_cookies("Extracted 0 cookies from brave (2315 could not be decrypted)"));
+        assert!(!extracted_no_cookies("Extracted 1180 cookies from firefox"));
+        assert!(!is_cookie_failure("Extracted 0 cookies from brave"));
+    }
+
+    #[test]
+    fn safari_is_offered_only_on_macos() {
+        let ids: Vec<&str> = browsers_here().into_iter().map(|(id, _)| id).collect();
+        assert!(ids.contains(&"firefox"));
+        assert_eq!(ids.contains(&"safari"), cfg!(target_os = "macos"));
     }
 }

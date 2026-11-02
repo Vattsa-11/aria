@@ -44,6 +44,7 @@ pub struct Settings {
     pub crossfade: f32,
 
     pub jiosaavn_base: String,
+    pub ytdlp_cookie_browser: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -86,6 +87,7 @@ impl Default for Settings {
             battery_saver: false,
             crossfade: 0.0,
             jiosaavn_base: String::new(),
+            ytdlp_cookie_browser: None,
         }
     }
 }

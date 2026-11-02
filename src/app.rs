@@ -168,6 +168,7 @@ impl App {
         theme::apply(&ctx, &settings);
 
         crate::provider_jiosaavn::set_base(&settings.jiosaavn_base);
+        crate::ytdlp::set_cookie_browser(settings.ytdlp_cookie_browser.as_deref());
         let jobs = crate::jobs::spawn();
         let writer = crate::writer::spawn();
         let eq = crate::equalizer::EqParams::new(&settings.eq);
