@@ -78,11 +78,20 @@ pub struct SavedState {
     pub position_ms: u64,
 }
 
+static INITIALISED: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+
 fn open() -> Result<Connection, String> {
     let dir = data_dir();
     std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
-    let conn = Connection::open(dir.join("library.db")).map_err(|err| err.to_string())?;
-    conn.execute_batch(SCHEMA).map_err(|err| err.to_string())?;
+    let path = dir.join("library.db");
+    let conn = Connection::open(&path).map_err(|err| err.to_string())?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|err| err.to_string())?;
+    let mut ready = INITIALISED.lock().unwrap_or_else(|err| err.into_inner());
+    if !ready.contains(&path) {
+        conn.execute_batch(SCHEMA).map_err(|err| err.to_string())?;
+        ready.push(path);
+    }
     Ok(conn)
 }
 

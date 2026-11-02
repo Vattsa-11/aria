@@ -131,10 +131,20 @@ fn run(
     let mut fade_out: Option<(usize, Instant, Duration)> = None;
     let mut paused = false;
 
+    let mut backlog: std::collections::VecDeque<Command> = std::collections::VecDeque::new();
+
     loop {
-        while let Ok(command) = rx.try_recv() {
+        while let Some(command) = backlog.pop_front().or_else(|| rx.try_recv().ok()) {
             match command {
                 Command::Play(request) => {
+                    let mut queued = Vec::new();
+                    while let Ok(next) = rx.try_recv() {
+                        queued.push(next);
+                    }
+                    let (request, others) = coalesce_play(request, queued);
+                    for other in others.into_iter().rev() {
+                        backlog.push_front(other);
+                    }
                     let fade = request.fade.min(Duration::from_secs(12));
                     let crossfading = fade > Duration::from_millis(80)
                         && loaded
@@ -283,6 +293,21 @@ fn build_decoder(
     builder.build()
 }
 
+pub fn coalesce_play(first: Box<PlayRequest>, queued: Vec<Command>) -> (Box<PlayRequest>, Vec<Command>) {
+    let mut request = first;
+    let mut others = Vec::new();
+    for command in queued {
+        match command {
+            Command::Play(newer) => {
+                request = newer;
+                others.retain(|kept| matches!(kept, Command::SetVolume(_)));
+            }
+            other => others.push(other),
+        }
+    }
+    (request, others)
+}
+
 type Loaded = (Box<dyn AudioSource>, Option<Duration>, Option<u64>);
 
 fn load_source(
@@ -329,5 +354,36 @@ mod tests {
         let decoder = build_decoder(Box::new(BufReader::new(file)), len).expect("decode m4a");
         assert!(decoder.count() > 5_000);
         std::fs::remove_file(&path).ok();
+    }
+
+    fn request(id: u64) -> Box<PlayRequest> {
+        let mut track = Track::local(std::path::Path::new("/music/a.mp3"));
+        track.id = id;
+        Box::new(PlayRequest {
+            track,
+            resolved: None,
+            start: Duration::ZERO,
+            duration: None,
+            fade: Duration::ZERO,
+        })
+    }
+
+    #[test]
+    fn only_the_latest_queued_play_is_loaded() {
+        let queued = vec![
+            Command::SetVolume(0.4),
+            Command::Play(request(2)),
+            Command::Pause,
+            Command::Play(request(3)),
+            Command::Seek(Duration::from_secs(5)),
+        ];
+        let (chosen, others) = coalesce_play(request(1), queued);
+        assert_eq!(chosen.track.id, 3);
+        assert_eq!(others.len(), 2);
+        assert!(matches!(others[0], Command::SetVolume(_)) || matches!(others[0], Command::Seek(_)));
+        assert!(others.iter().any(|c| matches!(c, Command::Seek(_))));
+        let (only, none) = coalesce_play(request(9), Vec::new());
+        assert_eq!(only.track.id, 9);
+        assert!(none.is_empty());
     }
 }

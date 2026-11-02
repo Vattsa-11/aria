@@ -295,7 +295,7 @@ impl App {
     }
 
     pub fn audio_state(&self) -> AudioState {
-        self.player.snapshot().state
+        effective_state(self.player.snapshot().state, self.resolving)
     }
 
     pub fn is_playing(&self) -> bool {
@@ -1900,6 +1900,14 @@ fn collect_audio_files(folder: &std::path::Path, depth: usize) -> Vec<PathBuf> {
     found
 }
 
+pub fn effective_state(audio: AudioState, resolving: bool) -> AudioState {
+    if resolving {
+        AudioState::Loading
+    } else {
+        audio
+    }
+}
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
 
@@ -1923,5 +1931,19 @@ impl eframe::App for App {
         theme::palette(self.settings.theme)
             .bg
             .to_normalized_gamma_f32()
+    }
+}
+
+#[cfg(test)]
+mod state_tests {
+    use super::effective_state;
+    use crate::player::AudioState;
+
+    #[test]
+    fn resolving_counts_as_loading_so_play_cannot_start_a_second_load() {
+        for audio in [AudioState::Idle, AudioState::Playing, AudioState::Paused, AudioState::Loading] {
+            assert_eq!(effective_state(audio, true), AudioState::Loading);
+            assert_eq!(effective_state(audio, false), audio);
+        }
     }
 }
