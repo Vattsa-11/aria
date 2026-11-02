@@ -131,6 +131,8 @@ fn run(
     let mut fade_in: Option<(Instant, Duration)> = None;
     let mut fade_out: Option<(usize, Instant, Duration)> = None;
     let mut paused = false;
+    let mut streaming_only = false;
+    let mut stream_fork: Option<(crate::http::HttpStream, Option<u64>)> = None;
 
     let mut backlog: std::collections::VecDeque<Command> = std::collections::VecDeque::new();
 
@@ -159,8 +161,13 @@ fn run(
                     }
                     let target = if crossfading { 1 - active } else { active };
                     match load_source(&mut request) {
-                        Ok((source, duration_hint, byte_len)) => match build_decoder(source, byte_len) {
-                            Ok(decoder) => {
+                        Ok(Loaded { source, duration: duration_hint, byte_len, fork }) => match match &fork {
+                            Some(handle) => build_streaming_decoder(source)
+                                .map(|decoder| (decoder, true))
+                                .or_else(|_| build_decoder(Box::new(handle.fork()), byte_len).map(|decoder| (decoder, false))),
+                            None => build_decoder(source, byte_len).map(|decoder| (decoder, false)),
+                        } {
+                            Ok((decoder, streaming)) => {
                                 let decoder_duration = decoder.total_duration();
                                 if crossfading {
                                     sinks[target].stop();
@@ -180,11 +187,23 @@ fn run(
                                     EqSource::new(decoder, eq.clone()),
                                     normalize.clone(),
                                 ));
-                                if request.start > Duration::ZERO {
-                                    let _ = sinks[active].try_seek(request.start);
-                                }
                                 sinks[active].play();
                                 loaded = true;
+                                streaming_only = streaming;
+                                stream_fork = if streaming { fork.map(|handle| (handle, byte_len)) } else { None };
+                                if request.start > Duration::ZERO {
+                                    let swapped = match &stream_fork {
+                                        Some((handle, len)) if streaming_only => {
+                                            swap_to_seekable(&sinks[active], handle, *len, &eq, &normalize, request.start, false)
+                                        }
+                                        _ => false,
+                                    };
+                                    if swapped {
+                                        streaming_only = false;
+                                    } else {
+                                        let _ = sinks[active].try_seek(request.start);
+                                    }
+                                }
                                 let mut state = lock(&snapshot);
                                 state.state = AudioState::Playing;
                                 state.position = request.start;
@@ -226,7 +245,19 @@ fn run(
                     }
                 }
                 Command::Seek(position) => {
-                    let _ = sinks[active].try_seek(position);
+                    let mut swapped = false;
+                    if streaming_only {
+                        if let Some((handle, len)) = &stream_fork {
+                            set_state(&snapshot, AudioState::Loading);
+                            swapped = swap_to_seekable(&sinks[active], handle, *len, &eq, &normalize, position, paused);
+                            set_state(&snapshot, if paused { AudioState::Paused } else { AudioState::Playing });
+                        }
+                    }
+                    if swapped {
+                        streaming_only = false;
+                    } else {
+                        let _ = sinks[active].try_seek(position);
+                    }
                     lock(&snapshot).position = position;
                 }
                 Command::SetVolume(value) => {
@@ -240,6 +271,8 @@ fn run(
                     fade_out = None;
                     paused = false;
                     loaded = false;
+                    streaming_only = false;
+                    stream_fork = None;
                     let mut state = lock(&snapshot);
                     state.state = AudioState::Idle;
                     state.position = Duration::ZERO;
@@ -309,7 +342,44 @@ pub fn coalesce_play(first: Box<PlayRequest>, queued: Vec<Command>) -> (Box<Play
     (request, others)
 }
 
-type Loaded = (Box<dyn AudioSource>, Option<Duration>, Option<u64>);
+struct Loaded {
+    source: Box<dyn AudioSource>,
+    duration: Option<Duration>,
+    byte_len: Option<u64>,
+    fork: Option<crate::http::HttpStream>,
+}
+
+fn build_streaming_decoder(
+    source: Box<dyn AudioSource>,
+) -> Result<Decoder<Box<dyn AudioSource>>, rodio::decoder::DecoderError> {
+    Decoder::builder().with_data(source).with_seekable(false).build()
+}
+
+fn swap_to_seekable(
+    sink: &RodioPlayer,
+    fork: &crate::http::HttpStream,
+    byte_len: Option<u64>,
+    eq: &Arc<EqParams>,
+    normalize: &Arc<std::sync::atomic::AtomicBool>,
+    position: Duration,
+    paused: bool,
+) -> bool {
+    let Ok(decoder) = build_decoder(Box::new(fork.fork()), byte_len) else {
+        return false;
+    };
+    sink.stop();
+    sink.append(NormalizeSource::with_flag(
+        EqSource::new(decoder, eq.clone()),
+        normalize.clone(),
+    ));
+    let _ = sink.try_seek(position);
+    if paused {
+        sink.pause();
+    } else {
+        sink.play();
+    }
+    true
+}
 
 fn load_source(
     request: &mut PlayRequest,
@@ -319,11 +389,12 @@ fn load_source(
             let file = File::open(path)
                 .map_err(|err| format!("Cannot open {}: {err}", path.display()))?;
             let len = file.metadata().ok().map(|meta| meta.len());
-            Ok((
-                Box::new(BufReader::new(file)),
-                request.track.duration,
-                len,
-            ))
+            Ok(Loaded {
+                source: Box::new(BufReader::new(file)),
+                duration: request.track.duration,
+                byte_len: len,
+                fork: None,
+            })
         }
         TrackSource::Yt { .. } | TrackSource::Jiosaavn { .. } => {
             let resolved = request
@@ -344,7 +415,13 @@ fn load_source(
             };
             let duration = resolved.duration.or(request.duration);
             let len = stream.len();
-            Ok((Box::new(stream), duration, len))
+            let fork = stream.fork();
+            Ok(Loaded {
+                source: Box::new(stream),
+                duration,
+                byte_len: len,
+                fork: Some(fork),
+            })
         }
     }
 }
@@ -352,6 +429,7 @@ fn load_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
     #[test]
     fn decodes_downloaded_aac_in_mp4() {
@@ -361,6 +439,73 @@ mod tests {
         let len = file.metadata().ok().map(|meta| meta.len());
         let decoder = build_decoder(Box::new(BufReader::new(file)), len).expect("decode m4a");
         assert!(decoder.count() > 5_000);
+        std::fs::remove_file(&path).ok();
+    }
+
+    struct Counting {
+        file: File,
+        highest: Arc<Mutex<u64>>,
+    }
+
+    impl std::io::Read for Counting {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let read = self.file.read(buf)?;
+            let position = self.file.stream_position()?;
+            let mut highest = self.highest.lock().unwrap();
+            *highest = (*highest).max(position);
+            Ok(read)
+        }
+    }
+
+    impl std::io::Seek for Counting {
+        fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.file.seek(position)
+        }
+    }
+
+    impl AudioSource for Counting {}
+
+    fn fragmented_fixture(name: &str) -> (std::path::PathBuf, u64) {
+        let path = std::env::temp_dir().join(format!("aria-dash-{name}-{}.m4a", std::process::id()));
+        std::fs::write(&path, include_bytes!("fixtures/dash.m4a")).expect("write fixture");
+        let len = std::fs::metadata(&path).unwrap().len();
+        (path, len)
+    }
+
+    #[test]
+    fn streaming_decoder_starts_after_reading_only_the_beginning() {
+        let (path, len) = fragmented_fixture("start");
+        let highest = Arc::new(Mutex::new(0u64));
+        let source = Counting { file: File::open(&path).unwrap(), highest: highest.clone() };
+        let decoder = build_streaming_decoder(Box::new(source)).expect("streaming decode");
+        let read = *highest.lock().unwrap();
+        assert!(read * 4 < len, "read {read} of {len} bytes before starting");
+        assert!(decoder.take(2000).count() > 1000);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn seekable_decoder_scans_every_fragment_first() {
+        let (path, len) = fragmented_fixture("scan");
+        let highest = Arc::new(Mutex::new(0u64));
+        let source = Counting { file: File::open(&path).unwrap(), highest: highest.clone() };
+        build_decoder(Box::new(source), Some(len)).expect("seekable decode");
+        assert!(*highest.lock().unwrap() * 10 >= len * 9, "expected a full scan");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn streaming_decoder_still_seeks_to_the_right_place() {
+        use rodio::Source;
+        let (path, len) = fragmented_fixture("seek");
+        let highest = Arc::new(Mutex::new(0u64));
+        let source = Counting { file: File::open(&path).unwrap(), highest: highest.clone() };
+        let mut decoder = build_streaming_decoder(Box::new(source)).expect("streaming decode");
+        let rate = decoder.sample_rate().get() as f64 * decoder.channels().get() as f64;
+        decoder.try_seek(Duration::from_secs(10)).expect("seek");
+        let remaining = decoder.count() as f64 / rate;
+        assert!((13.0..15.0).contains(&remaining), "about 14s should remain after seeking to 10s of 24s, got {remaining}");
+        assert!(*highest.lock().unwrap() <= len);
         std::fs::remove_file(&path).ok();
     }
 

@@ -5,10 +5,10 @@ use std::time::Duration;
 
 use ureq::Agent;
 
-const CHUNK: u64 = 1024 * 1024;
+const CHUNK: u64 = 256 * 1024;
 
-pub fn range_header(at: u64, len: Option<u64>) -> String {
-    let mut end = at + CHUNK - 1;
+pub fn range_header(at: u64, len: Option<u64>, span: u64) -> String {
+    let mut end = at + span * CHUNK - 1;
     if let Some(len) = len {
         end = end.min(len.saturating_sub(1));
     }
@@ -31,7 +31,9 @@ pub fn stream_agent() -> Agent {
         .into()
 }
 
-const MAX_CHUNKS: usize = 40;
+const MAX_CHUNKS: usize = 160;
+const READ_AHEAD: u64 = 3;
+const FILL_SPAN: u64 = 8;
 
 const MAX_WHOLE_BODY: u64 = 128 * 1024 * 1024;
 
@@ -62,6 +64,7 @@ fn fetch_chunk(
     url: &str,
     headers: &[(String, String)],
     index: u64,
+    span: u64,
     known_len: Option<u64>,
 ) -> io::Result<Fetched> {
     let at = index * CHUNK;
@@ -70,7 +73,7 @@ fn fetch_chunk(
         if attempt > 0 {
             std::thread::sleep(Duration::from_millis(250 * attempt));
         }
-        let mut request = agent.get(url).header("Range", &range_header(at, known_len));
+        let mut request = agent.get(url).header("Range", &range_header(at, known_len, span));
         for (key, value) in headers {
             request = request.header(key, value);
         }
@@ -94,13 +97,18 @@ fn fetch_chunk(
             .and_then(|value| value.split('/').nth(1))
             .and_then(|value| value.parse::<u64>().ok());
         let mut body = Vec::new();
-        let limit = if status == 206 { CHUNK } else { MAX_WHOLE_BODY };
+        let limit = if status == 206 { span * CHUNK } else { MAX_WHOLE_BODY };
         if let Err(err) = response.body_mut().as_reader().take(limit).read_to_end(&mut body) {
             last = err;
             continue;
         }
         if status == 206 {
-            return Ok((vec![(index, body)], total.or(known_len)));
+            let pieces = body
+                .chunks(CHUNK as usize)
+                .enumerate()
+                .map(|(n, piece)| (index + n as u64, piece.to_vec()))
+                .collect();
+            return Ok((pieces, total.or(known_len)));
         }
         let whole = body.len() as u64;
         let pieces = body
@@ -114,23 +122,45 @@ fn fetch_chunk(
 }
 
 fn load_chunk(shared: &Arc<Shared>, agent: &Agent, url: &str, headers: &[(String, String)], index: u64) -> io::Result<()> {
-    {
+    load_span(shared, agent, url, headers, index, 1).map(|_| ())
+}
+
+fn load_span(
+    shared: &Arc<Shared>,
+    agent: &Agent,
+    url: &str,
+    headers: &[(String, String)],
+    index: u64,
+    count: u64,
+) -> io::Result<u64> {
+    let (claimed, known_len) = {
         let mut cache = shared.cache.lock().unwrap_or_else(|err| err.into_inner());
         if cache.chunks.contains_key(&index) {
-            return Ok(());
+            return Ok(0);
         }
         while cache.inflight.contains(&index) {
             cache = shared.ready.wait(cache).unwrap_or_else(|err| err.into_inner());
             if cache.chunks.contains_key(&index) {
-                return Ok(());
+                return Ok(0);
             }
         }
-        cache.inflight.insert(index);
-    }
-    let known_len = shared.cache.lock().unwrap_or_else(|err| err.into_inner()).len;
-    let result = fetch_chunk(agent, url, headers, index, known_len);
+        let known_len = cache.len;
+        let mut claimed = 0;
+        while claimed < count
+            && !cache.chunks.contains_key(&(index + claimed))
+            && !cache.inflight.contains(&(index + claimed))
+            && known_len.is_none_or(|len| (index + claimed) * CHUNK < len)
+        {
+            cache.inflight.insert(index + claimed);
+            claimed += 1;
+        }
+        (claimed.max(1), known_len)
+    };
+    let result = fetch_chunk(agent, url, headers, index, claimed, known_len);
     let mut cache = shared.cache.lock().unwrap_or_else(|err| err.into_inner());
-    cache.inflight.remove(&index);
+    for offset in 0..claimed {
+        cache.inflight.remove(&(index + offset));
+    }
     let outcome = match result {
         Ok((pieces, total)) => {
             if total.is_some() {
@@ -139,7 +169,7 @@ fn load_chunk(shared: &Arc<Shared>, agent: &Agent, url: &str, headers: &[(String
             for (piece_index, data) in pieces {
                 cache.chunks.insert(piece_index, Arc::new(data));
             }
-            Ok(())
+            Ok(claimed)
         }
         Err(err) => Err(err),
     };
@@ -167,15 +197,44 @@ impl HttpStream {
         });
         load_chunk(&shared, &agent, &url, &headers, 0).map_err(|err| err.to_string())?;
         let stream = Self { agent, url, headers, pos: 0, shared };
-        if let Some(len) = stream.len() {
-            let count = len.div_ceil(CHUNK);
-            for index in 1..count {
-                if count <= 12 || index < 4 || index + 2 >= count {
-                    stream.prefetch(index);
+        stream.fill_in_background();
+        Ok(stream)
+    }
+
+    pub fn fork(&self) -> Self {
+        Self {
+            agent: self.agent.clone(),
+            url: self.url.clone(),
+            headers: self.headers.clone(),
+            pos: 0,
+            shared: self.shared.clone(),
+        }
+    }
+
+    fn fill_in_background(&self) {
+        let weak = Arc::downgrade(&self.shared);
+        let agent = self.agent.clone();
+        let url = self.url.clone();
+        let headers = self.headers.clone();
+        let _ = std::thread::Builder::new().name("aria-fill".into()).spawn(move || {
+            let mut index = 1u64;
+            loop {
+                let Some(shared) = weak.upgrade() else {
+                    return;
+                };
+                let len = shared.cache.lock().unwrap_or_else(|err| err.into_inner()).len;
+                let Some(len) = len else {
+                    return;
+                };
+                if index * CHUNK >= len || index as usize >= MAX_CHUNKS {
+                    return;
+                }
+                match load_span(&shared, &agent, &url, &headers, index, FILL_SPAN) {
+                    Ok(claimed) => index += claimed.max(1),
+                    Err(_) => return,
                 }
             }
-        }
-        Ok(stream)
+        });
     }
 
     pub fn len(&self) -> Option<u64> {
@@ -227,8 +286,8 @@ impl Read for HttpStream {
         let count = buf.len().min(chunk.len() - offset);
         buf[..count].copy_from_slice(&chunk[offset..offset + count]);
         self.pos += count as u64;
-        if offset + count > chunk.len() / 4 {
-            self.prefetch(index + 1);
+        for ahead in 1..=READ_AHEAD {
+            self.prefetch(index + ahead);
         }
         Ok(count)
     }
@@ -325,11 +384,31 @@ mod tests {
         let mut tail = Vec::new();
         stream.read_to_end(&mut tail).unwrap();
         assert_eq!(tail, &data[2_499_900..]);
-        stream.seek(SeekFrom::Start(1_048_570)).unwrap();
+        stream.seek(SeekFrom::Start(262_140)).unwrap();
         let mut across = [0u8; 20];
         stream.read_exact(&mut across).unwrap();
-        assert_eq!(&across[..], &data[1_048_570..1_048_590]);
+        assert_eq!(&across[..], &data[262_140..262_160]);
+        let forked = stream.fork();
+        assert_eq!(forked.len(), stream.len());
         assert!(stream.seek(SeekFrom::Start(3_000_000)).is_err());
+    }
+
+    #[test]
+    fn a_fork_reads_independently_from_the_shared_cache() {
+        let data = sample(900_000);
+        let mut first = HttpStream::open(super::stream_agent(), serve(data.clone(), true), Vec::new()).expect("open");
+        let mut second = first.fork();
+        let mut head = [0u8; 100];
+        first.read_exact(&mut head).unwrap();
+        second.seek(SeekFrom::Start(700_000)).unwrap();
+        let mut tail = [0u8; 100];
+        second.read_exact(&mut tail).unwrap();
+        assert_eq!(&head[..], &data[..100]);
+        assert_eq!(&tail[..], &data[700_000..700_100]);
+        first.seek(SeekFrom::Start(100)).unwrap();
+        let mut next = [0u8; 50];
+        first.read_exact(&mut next).unwrap();
+        assert_eq!(&next[..], &data[100..150]);
     }
 
     #[test]
@@ -344,8 +423,9 @@ mod tests {
 
     #[test]
     fn requests_are_bounded_chunks() {
-        assert_eq!(range_header(0, None), "bytes=0-1048575");
-        assert_eq!(range_header(1_048_576, Some(4_323_485)), "bytes=1048576-2097151");
-        assert_eq!(range_header(4_000_000, Some(4_323_485)), "bytes=4000000-4323484");
+        assert_eq!(range_header(0, None, 1), "bytes=0-262143");
+        assert_eq!(range_header(262_144, Some(4_323_485), 1), "bytes=262144-524287");
+        assert_eq!(range_header(4_200_000, Some(4_323_485), 1), "bytes=4200000-4323484");
+        assert_eq!(range_header(524_288, Some(4_323_485), 8), "bytes=524288-2621439");
     }
 }
