@@ -226,13 +226,34 @@ pub fn is_youtube_mix(url: &str) -> bool {
         .any(|list| list.starts_with("RD") && !list.starts_with("RDCLAK"))
 }
 
+pub const MIX_LIMIT: usize = 100;
+
+pub fn dedupe_tracks(tracks: Vec<Track>) -> Vec<Track> {
+    let mut seen = std::collections::HashSet::new();
+    tracks.into_iter().filter(|track| seen.insert(track.id)).collect()
+}
+
+pub fn mix_playlist_name(existing: &[String], first_title: &str) -> String {
+    let short: String = first_title.chars().take(40).collect();
+    let base = format!("Mix - {}", short.trim());
+    let taken = |name: &str| existing.iter().any(|other| other.eq_ignore_ascii_case(name));
+    if !taken(&base) {
+        return base;
+    }
+    (2..)
+        .map(|n| format!("{base} ({n})"))
+        .find(|candidate| !taken(candidate))
+        .unwrap_or(base)
+}
+
 pub fn playlist_tracks(url: &str) -> Result<Vec<Track>, String> {
-    let raw = run(&[
-        "--flat-playlist",
-        "--no-warnings",
-        "--dump-single-json",
-        url,
-    ])?;
+    let limit = MIX_LIMIT.to_string();
+    let mut args = vec!["--flat-playlist", "--no-warnings", "--dump-single-json"];
+    if is_youtube_mix(url) {
+        args.extend(["--playlist-end", limit.as_str()]);
+    }
+    args.push(url);
+    let raw = run(&args)?;
     let json: Value =
         serde_json::from_str(&raw).map_err(|_| "yt-dlp returned invalid JSON".to_string())?;
     let entries = json
@@ -262,6 +283,7 @@ pub fn playlist_tracks(url: &str) -> Result<Vec<Track>, String> {
         let duration = safe_duration(entry.get("duration").and_then(Value::as_f64));
         tracks.push(Track::yt(id, title, artist, duration));
     }
+    let tracks = dedupe_tracks(tracks);
     if tracks.is_empty() {
         return Err("That playlist has no tracks".to_string());
     }
@@ -487,7 +509,8 @@ pub fn download_latest() -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod mix_tests {
-    use super::is_youtube_mix;
+    use super::{dedupe_tracks, is_youtube_mix, mix_playlist_name};
+    use crate::model::Track;
 
     #[test]
     fn detects_generated_youtube_mixes_but_not_real_playlists() {
@@ -498,6 +521,20 @@ mod mix_tests {
         assert!(!is_youtube_mix("https://music.youtube.com/playlist?list=RDCLAK5uy_kabc"));
         assert!(!is_youtube_mix("https://www.youtube.com/watch?v=RDabc"));
         assert!(!is_youtube_mix("not a url"));
+    }
+
+    #[test]
+    fn mix_snapshots_are_deduplicated_and_named_uniquely() {
+        let a = Track::yt("aaa", "One", "X", None);
+        let b = Track::yt("bbb", "Two", "X", None);
+        let unique = dedupe_tracks(vec![a.clone(), b.clone(), a.clone(), b, a]);
+        assert_eq!(unique.len(), 2);
+        assert_eq!(unique[0].title, "One");
+        let taken = vec!["Mix - Song".to_string()];
+        assert_eq!(mix_playlist_name(&[], "Song"), "Mix - Song");
+        assert_eq!(mix_playlist_name(&taken, "song"), "Mix - song (2)");
+        let long = mix_playlist_name(&[], &"x".repeat(80));
+        assert_eq!(long.chars().count(), "Mix - ".len() + 40);
     }
 }
 

@@ -973,6 +973,21 @@ impl App {
         });
     }
 
+    pub fn save_mix_as_playlist(&mut self, tracks: Vec<Track>) {
+        let Some(first) = tracks.first() else {
+            return;
+        };
+        let names: Vec<String> = self.playlists.iter().map(|p| p.name.clone()).collect();
+        let name = crate::ytdlp::mix_playlist_name(&names, &first.title);
+        let count = tracks.len();
+        let mut playlist = Playlist::new(&name);
+        playlist.tracks = tracks;
+        self.playlists.push(playlist);
+        self.persist_playlists();
+        self.page = Page::PlaylistDetail(self.playlists.len() - 1);
+        self.notify(format!("Saved {count} songs from the Mix as the playlist {name}"));
+    }
+
     pub fn create_playlist(&mut self, name: &str) {
         let name = name.trim();
         if name.is_empty() {
@@ -1873,6 +1888,10 @@ impl App {
                             self.fail(format!("Import failed: {message}"), None);
                         }
                         None => {
+                            if crate::ytdlp::is_youtube_mix(&self.import.url) {
+                                self.save_mix_as_playlist(tracks);
+                                continue;
+                            }
                             let mut entries = Vec::new();
                             for track in tracks {
                                 let mut entry = crate::import::ImportEntry::with_duration(
@@ -1894,9 +1913,6 @@ impl App {
                                 self.import.new_playlist = "Imported playlist".to_string();
                             }
                             self.page = Page::Import;
-                            if crate::ytdlp::is_youtube_mix(&self.import.url) {
-                                self.notify("YouTube Mix: YouTube builds it on the fly, so this is a snapshot that can differ from the browser");
-                            }
                         }
                     }
                 }
