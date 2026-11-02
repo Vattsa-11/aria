@@ -1,5 +1,5 @@
 use egui::{
-    Align2, Color32, CornerRadius, FontId, Rect, Response, Sense, Stroke, StrokeKind, TextStyle,
+    Align2, Color32, CornerRadius, FontId, Rect, Response, Sense, Stroke, TextStyle,
     Ui, Vec2,
 };
 
@@ -199,18 +199,33 @@ pub fn seek_bar(
     None
 }
 
-pub fn art_placeholder(ui: &mut Ui, size: f32, accent: Color32, pal: &Palette) {
+pub fn paint_cover(
+    painter: &egui::Painter,
+    rect: Rect,
+    texture: Option<&egui::TextureHandle>,
+    radius: u8,
+    accent: Color32,
+    pal: &Palette,
+) {
+    let corner = CornerRadius::same(radius);
+    painter.rect_filled(rect, corner, pal.raised);
+    match texture {
+        Some(texture) => {
+            let uv = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+            painter.add(egui::epaint::RectShape::filled(rect, corner, Color32::WHITE).with_texture(texture.id(), uv));
+        }
+        None => icons::draw(
+            painter,
+            Rect::from_center_size(rect.center(), Vec2::splat(rect.width() * 0.4)),
+            Icon::Note,
+            accent.gamma_multiply(0.85),
+        ),
+    }
+}
+
+pub fn cover(ui: &mut Ui, size: f32, texture: Option<&egui::TextureHandle>, accent: Color32, pal: &Palette) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
-    let radius = CornerRadius::same((size * 0.18).clamp(6.0, 18.0) as u8);
-    ui.painter().rect_filled(rect, radius, pal.raised);
-    ui.painter()
-        .rect_stroke(rect, radius, Stroke::new(1.0, pal.line), StrokeKind::Inside);
-    icons::draw(
-        ui.painter(),
-        Rect::from_center_size(rect.center(), Vec2::splat(size * 0.36)),
-        Icon::Note,
-        accent.gamma_multiply(0.85),
-    );
+    paint_cover(ui.painter(), rect, texture, (size * 0.18).clamp(6.0, 18.0) as u8, accent, pal);
 }
 
 pub fn section_label(ui: &mut Ui, text: &str, pal: &Palette) {

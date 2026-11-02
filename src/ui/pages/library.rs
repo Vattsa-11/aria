@@ -52,21 +52,25 @@ pub fn library(app: &mut App, ui: &mut egui::Ui) {
 
     let mut rows: Vec<(egui::Response, Track)> = Vec::new();
 
+    let mut visible = 0..0;
     egui::ScrollArea::vertical()
         .scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, ..Default::default() })
         .auto_shrink([false, false])
         .show_rows(ui, crate::ui::pages::rows::ROW_H, app.tracks.len(), |ui, range| {
+        visible = range.clone();
         for index in range {
             let track = app.tracks[index].clone();
             let liked = app.is_liked(track.id);
             let body = egui::TextStyle::Body.resolve(ui.style());
             let small = egui::TextStyle::Small.resolve(ui.style());
+            let art = app.thumb(&track);
             let response = render_row(
                 ui,
                 index,
                 track.clone(),
                 liked,
                 RowStyle {
+                    art,
                     accent,
                     pal: &pal,
                     body_font: body,
@@ -85,6 +89,8 @@ pub fn library(app: &mut App, ui: &mut egui::Ui) {
         }
     });
 
+    let ahead = crate::ui::pages::rows::window(&app.tracks, &visible);
+    app.prefetch_thumbs(&ahead);
     crate::ui::pages::rows::row_menus(app, rows, crate::ui::pages::rows::MenuKind::Standard, &pal);
     ui.add_space(20.0);
 }
@@ -123,6 +129,7 @@ struct Response {
 }
 
 struct RowStyle<'a> {
+    art: Option<egui::TextureHandle>,
     accent: egui::Color32,
     pal: &'a Palette,
     body_font: egui::FontId,
@@ -137,6 +144,7 @@ fn render_row(
     style: RowStyle<'_>,
 ) -> Response {
     let RowStyle {
+        art,
         accent,
         pal,
         body_font,
@@ -152,14 +160,7 @@ fn render_row(
         egui::pos2(rect.min.x + 10.0, rect.center().y - art_w * 0.5),
         egui::Vec2::splat(art_w),
     );
-    ui.painter()
-        .rect_filled(art_rect, 8.0, pal.raised);
-    crate::ui::icons::draw(
-        ui.painter(),
-        egui::Rect::from_center_size(art_rect.center(), egui::Vec2::splat(art_w * 0.5)),
-        Icon::Note,
-        accent.gamma_multiply(0.85),
-    );
+    crate::ui::widgets::paint_cover(ui.painter(), art_rect, art.as_ref(), 8, accent, pal);
 
     let menu_x = rect.max.x - 48.0;
     let menu_rect = egui::Rect::from_min_size(

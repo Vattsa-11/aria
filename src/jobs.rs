@@ -13,6 +13,7 @@ pub enum Job {
         provider: Option<crate::provider::ProviderName>,
     },
     Resolve { gen: u64, track: Track },
+    Warm { track: Track },
     FixMatch { track: Track },
     Download {
         track: Track,
@@ -36,10 +37,6 @@ pub enum Job {
     },
 }
 
-pub enum ThumbJob {
-    Fetch { track_id: u64, url: String },
-}
-
 pub enum Event {
     Lyrics {
         track_id: u64,
@@ -55,6 +52,10 @@ pub enum Event {
         provider: Option<crate::provider::ProviderName>,
         results: Vec<Track>,
         error: Option<String>,
+    },
+    Warmed {
+        track_id: u64,
+        warmed: Option<(ResolvedStream, crate::http::HttpStream)>,
     },
     Resolved {
         gen: u64,
@@ -105,7 +106,7 @@ pub enum Event {
 
 pub struct Jobs {
     pub tx: Sender<Job>,
-    pub thumb_tx: Sender<ThumbJob>,
+    pub thumbs: crate::cache::ThumbQueue,
     pub event_tx: Sender<Event>,
     pub rx: Receiver<Event>,
 }
@@ -139,11 +140,10 @@ fn run_download(
 
 pub fn spawn() -> Jobs {
     let (tx, job_rx) = channel::<Job>();
-    let (thumb_tx, thumb_rx) = channel::<ThumbJob>();
+    let thumbs = crate::cache::ThumbQueue::default();
     let (event_tx, rx) = channel::<Event>();
 
     let worker_events = event_tx.clone();
-    let thumb_events = event_tx.clone();
     let _ = thread::Builder::new()
         .name("aria-jobs".into())
         .spawn(move || {
@@ -152,30 +152,43 @@ pub fn spawn() -> Jobs {
             }
         });
 
-    let _ = thread::Builder::new()
-        .name("aria-thumbs".into())
-        .spawn(move || {
-            while let Ok(job) = thumb_rx.recv() {
-                match job {
-                    ThumbJob::Fetch { track_id, url } => {
-                        let key = track_id.to_string();
-                        let bytes = crate::cache::load_disk(&key)
-                            .or_else(|| crate::cache::fetch_bytes(&url));
-                        let image = bytes
-                            .as_deref()
-                            .and_then(crate::cache::decode);
-                        if let Some(bytes) = &bytes {
-                            crate::cache::store_disk(&key, bytes);
-                        }
-                        let _ = thumb_events.send(Event::Thumb { track_id, image });
-                    }
+    for worker in 0..4 {
+        let queue = thumbs.clone();
+        let events = event_tx.clone();
+        let _ = thread::Builder::new()
+            .name(format!("aria-thumbs-{worker}"))
+            .spawn(move || loop {
+                let job = queue.pop_blocking();
+                let key = job.track_id.to_string();
+                let cached = crate::cache::load_disk(&key);
+                let from_disk = cached.is_some();
+                let outcome = match cached {
+                    Some(bytes) => Ok(bytes),
+                    None => crate::cache::fetch_bytes(&job.source),
                 }
-            }
-        });
+                .and_then(|bytes| {
+                    let image = crate::cache::decode(&bytes, job.letterboxed)?;
+                    Ok((bytes, image))
+                });
+                let image = match outcome {
+                    Ok((bytes, image)) => {
+                        if !from_disk {
+                            crate::cache::store_disk(&key, &bytes);
+                        }
+                        Some(image)
+                    }
+                    Err(reason) => {
+                        crate::logs::error(&format!("thumbnail {} ({}): {reason}", job.track_id, job.source));
+                        None
+                    }
+                };
+                let _ = events.send(Event::Thumb { track_id: job.track_id, image });
+            });
+    }
 
     Jobs {
         tx,
-        thumb_tx,
+        thumbs,
         event_tx,
         rx,
     }
@@ -254,6 +267,21 @@ fn handle(job: Job, event_tx: &Sender<Event>) {
                 provider,
                 results,
                 error,
+            });
+        }
+        Job::Warm { track } => {
+            let events = event_tx.clone();
+            let _ = thread::Builder::new().name("aria-warm".into()).spawn(move || {
+                let warmed = crate::provider::resolve_chain(&track).ok().and_then(|stream| {
+                    let http = crate::http::HttpStream::open(
+                        crate::http::stream_agent(),
+                        stream.url.clone(),
+                        stream.headers.clone(),
+                    )
+                    .ok()?;
+                    Some((stream, http))
+                });
+                let _ = events.send(Event::Warmed { track_id: track.id, warmed });
             });
         }
         Job::Resolve { gen, track } => {

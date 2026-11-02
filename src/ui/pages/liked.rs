@@ -47,14 +47,17 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
 
     let mut rows: Vec<(egui::Response, crate::model::Track)> = Vec::new();
 
+    let mut visible = 0..0;
     egui::ScrollArea::vertical().scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, ..Default::default() })
         .auto_shrink([false, false])
         .show_rows(ui, crate::ui::pages::rows::ROW_H, app.liked.len(), |ui, range| {
+        visible = range.clone();
         for index in range {
             let track = app.liked[index].clone();
             let (dim, badge) = app.row_state(&track);
+            let art = app.thumb(&track);
             let resp = track_row(
-                ui, salt, index, &track, true, accent, &pal, false, false, None, dim, badge,
+                ui, salt, index, &track, art.as_ref(), true, accent, &pal, false, false, None, dim, badge,
             );
             let clicked = resp.clicked;
             let like_clicked = resp.like.clicked();
@@ -75,6 +78,8 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
             app.toggle_like_track(&track);
         }
     }
+    let ahead = crate::ui::pages::rows::window(&app.liked, &visible);
+    app.prefetch_thumbs(&ahead);
     crate::ui::pages::rows::row_menus(app, rows, crate::ui::pages::rows::MenuKind::Standard, &pal);
     ui.add_space(20.0);
 }

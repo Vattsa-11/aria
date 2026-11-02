@@ -59,7 +59,7 @@ pub fn home(app: &mut App, ui: &mut egui::Ui) {
 
             if !app.playlists.is_empty() {
                 section(ui, "Your playlists", &pal);
-                let playlists: Vec<(usize, String, usize, Option<String>)> = app
+                let playlists: Vec<(usize, String, usize, Option<Track>)> = app
                     .playlists
                     .iter()
                     .enumerate()
@@ -69,13 +69,14 @@ pub fn home(app: &mut App, ui: &mut egui::Ui) {
                             index,
                             playlist.name.clone(),
                             playlist.tracks.len(),
-                            playlist.tracks.first().and_then(|track| track.thumb.clone()),
+                            playlist.tracks.first().cloned(),
                         )
                     })
                     .collect();
                 ui.horizontal_wrapped(|ui| {
-                    for (index, name, count, thumb) in playlists {
-                        if card(ui, &name, &format!("{count} tracks"), thumb.as_deref(), &pal, accent)
+                    for (index, name, count, cover) in playlists {
+                        let art = cover.and_then(|track| app.thumb(&track));
+                        if card(ui, &name, &format!("{count} tracks"), art.as_ref(), &pal, accent)
                         {
                             actions.push(Action::PlayPlaylist(index, 0));
                         }
@@ -100,7 +101,8 @@ pub fn home(app: &mut App, ui: &mut egui::Ui) {
                 section(ui, "Quick picks", &pal);
                 ui.horizontal_wrapped(|ui| {
                     for (track, source) in picks {
-                        if pick_card(ui, &track, &pal, accent) {
+                        let art = app.thumb(&track);
+                        if pick_card(ui, &track, art.as_ref(), &pal, accent) {
                             match source {
                                 PickSource::Library(index) => actions.push(Action::PlayLibrary(index)),
                                 PickSource::Liked(index) => actions.push(Action::PlayPick(PickSource::Liked(index))),
@@ -297,11 +299,7 @@ fn track_strip(
 ) {
     ui.horizontal_wrapped(|ui| {
         for (index, track) in tracks.iter().enumerate() {
-            let thumb = track.thumb.clone();
-            if let Some(url) = &thumb {
-                app.request_thumb_by_url(track.id, url.clone());
-            }
-            let texture = app.thumbs.get(track.id);
+            let texture = app.thumb(track);
             let (rect, response) =
                 ui.allocate_exact_size(Vec2::new(CARD, CARD + 44.0), Sense::click());
             if response.hovered() {
@@ -344,7 +342,7 @@ fn card(
     ui: &mut egui::Ui,
     title: &str,
     subtitle: &str,
-    thumb: Option<&str>,
+    art: Option<&egui::TextureHandle>,
     pal: &Palette,
     accent: Color32,
 ) -> bool {
@@ -355,15 +353,7 @@ fn card(
     }
     let art_rect =
         egui::Rect::from_min_size(rect.min + Vec2::new(4.0, 4.0), Vec2::splat(CARD - 8.0));
-    ui.painter()
-        .rect_filled(art_rect, egui::CornerRadius::same(10), pal.raised);
-    let _ = thumb;
-    crate::ui::icons::draw(
-        ui.painter(),
-        egui::Rect::from_center_size(art_rect.center(), Vec2::splat(CARD * 0.32)),
-        Icon::Queue,
-        accent.gamma_multiply(0.8),
-    );
+    crate::ui::widgets::paint_cover(ui.painter(), art_rect, art, 10, accent, pal);
     let clip = ui.painter().with_clip_rect(egui::Rect::from_min_max(
         egui::pos2(rect.min.x + 4.0, art_rect.max.y + 6.0),
         egui::pos2(rect.max.x - 4.0, rect.max.y),
@@ -385,25 +375,19 @@ fn card(
     response.clicked()
 }
 
-fn pick_card(ui: &mut egui::Ui, track: &Track, pal: &Palette, accent: Color32) -> bool {
+fn pick_card(ui: &mut egui::Ui, track: &Track, art: Option<&egui::TextureHandle>, pal: &Palette, accent: Color32) -> bool {
     let width = ((ui.available_width() - 12.0) * 0.5).clamp(220.0, 460.0);
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 60.0), Sense::click());
     if response.hovered() {
         ui.painter()
             .rect_filled(rect, egui::CornerRadius::same(10), pal.raised);
     }
+    let art_tex = art;
     let art = egui::Rect::from_min_size(
         egui::pos2(rect.min.x + 6.0, rect.center().y - 22.0),
         Vec2::splat(44.0),
     );
-    ui.painter()
-        .rect_filled(art, egui::CornerRadius::same(8), pal.surface);
-    crate::ui::icons::draw(
-        ui.painter(),
-        egui::Rect::from_center_size(art.center(), Vec2::splat(20.0)),
-        Icon::Note,
-        accent.gamma_multiply(0.85),
-    );
+    crate::ui::widgets::paint_cover(ui.painter(), art, art_tex, 8, accent, pal);
     let clip = ui.painter().with_clip_rect(egui::Rect::from_min_max(
         egui::pos2(art.max.x + 10.0, rect.min.y + 8.0),
         egui::pos2(rect.max.x - 10.0, rect.max.y - 8.0),
@@ -433,25 +417,6 @@ fn paint_art(
     pal: &Palette,
     accent: Color32,
 ) {
-    ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(10), pal.surface);
-    match texture {
-        Some(texture) => {
-            ui.painter().image(
-                texture.id(),
-                rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                egui::Color32::WHITE,
-            );
-        }
-        None => {
-            crate::ui::icons::draw(
-                ui.painter(),
-                egui::Rect::from_center_size(rect.center(), Vec2::splat(rect.width() * 0.34)),
-                Icon::Note,
-                accent.gamma_multiply(0.8),
-            );
-            let _ = title;
-        }
-    }
+    crate::ui::widgets::paint_cover(ui.painter(), rect, texture.as_ref(), 10, accent, pal);
+    let _ = title;
 }

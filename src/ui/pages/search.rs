@@ -9,21 +9,7 @@ use crate::ui::theme::{accent, palette, Palette};
 use crate::ui::widgets::pill_button;
 
 fn thumb_or_placeholder(ui: &mut Ui, rect: Rect, texture: Option<egui::TextureHandle>, pal: &Palette, accent: egui::Color32) {
-    let radius = egui::CornerRadius::same(8);
-    if let Some(handle) = texture {
-        let uv = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-        ui.painter()
-            .image(handle.id(), rect, uv, egui::Color32::WHITE);
-        let _ = (radius, pal, accent);
-    } else {
-        ui.painter().rect_filled(rect, radius, pal.raised);
-        crate::ui::icons::draw(
-            ui.painter(),
-            Rect::from_center_size(rect.center(), Vec2::splat(rect.width() * 0.5)),
-            Icon::Note,
-            accent.gamma_multiply(0.85),
-        );
-    }
+    crate::ui::widgets::paint_cover(ui.painter(), rect, texture.as_ref(), 8, accent, pal);
 }
 
 struct Row {
@@ -319,18 +305,16 @@ pub fn search(app: &mut App, ui: &mut Ui) {
     let row_width = ui.available_width().max(200.0);
     let mut play: Option<usize> = None;
     let mut rows: Vec<Row> = Vec::new();
-    let mut missing: Vec<usize> = Vec::new();
+    let mut visible = 0..0;
 
     egui::ScrollArea::vertical().scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, ..Default::default() })
         .auto_shrink([false, false])
         .show_rows(ui, row_height, total, |ui, range| {
             ui.set_width(ui.available_width());
+            visible = range.clone();
             for index in range {
-                let track = &app.search.results[index];
-                let texture = app.thumbs.get(track.id);
-                if texture.is_none() {
-                    missing.push(index);
-                }
+                let track = app.search.results[index].clone();
+                let texture = app.thumb(&track);
                 let playing =
                     app.current.as_ref().map(|t| t.id) == Some(track.id);
                 let liked = app.is_liked(track.id);
@@ -358,13 +342,10 @@ pub fn search(app: &mut App, ui: &mut Ui) {
             }
         });
 
-    for &index in missing.iter().take(24) {
-        if let Some(track) = app.search.results.get(index) {
-            if let Some(url) = &track.thumb {
-                app.request_thumb_by_url(track.id, url.clone());
-            }
-        }
-    }
+    let window: Vec<crate::model::Track> = app.search.results
+        [visible.start.saturating_sub(6)..(visible.end + 14).min(total)]
+        .to_vec();
+    app.prefetch_thumbs(&window);
 
     let menu_rows: Vec<(Response, crate::model::Track)> = rows
         .into_iter()

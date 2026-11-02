@@ -18,7 +18,7 @@ use crate::ui::icons::Icon;
 use crate::ui::pages::rows::track_row;
 use crate::ui::theme::Palette;
 use crate::ui::widgets::{
-    art_placeholder, icon_button, primary_icon_button, seek_bar, toggle_icon_button,
+    icon_button, primary_icon_button, seek_bar, toggle_icon_button,
 };
 
 pub fn root(app: &mut App, ui: &mut Ui) {
@@ -403,18 +403,13 @@ fn player_bar_wide(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
         egui::pos2(rect.min.x + 2.0, cy - art * 0.5),
         Vec2::splat(art),
     );
-    painter.rect_filled(art_rect, CornerRadius::same(10), pal.raised);
+    let current_art = app.current_art();
+    crate::ui::widgets::paint_cover(&painter, art_rect, current_art.as_ref(), 10, accent, pal);
     painter.rect_stroke(
         art_rect,
         CornerRadius::same(10),
         Stroke::new(1.0, pal.line),
         egui::StrokeKind::Inside,
-    );
-    icons::draw(
-        &painter,
-        Rect::from_center_size(art_rect.center(), Vec2::splat(art * 0.36)),
-        Icon::Note,
-        accent.gamma_multiply(0.9),
     );
 
     let title = app
@@ -641,7 +636,8 @@ fn player_bar_compact(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette
         Vec2::new(width, 40.0),
         Layout::left_to_right(Align::Center),
         |ui| {
-            art_placeholder(ui, 36.0, accent, pal);
+            let current_art = app.current_art();
+            crate::ui::widgets::cover(ui, 36.0, current_art.as_ref(), accent, pal);
             ui.add_space(10.0);
             now_playing_labels(app, ui, (ui.available_width() - 130.0).max(90.0), 36.0, pal);
             let right = ui.available_width();
@@ -1057,7 +1053,15 @@ fn lyrics_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
                 .as_ref()
                 .map(|track| track.title.clone())
                 .unwrap_or_else(|| "Nothing playing".to_string());
-            ui.label(RichText::new(title).size(13.0).color(pal.muted));
+            let lyrics_art = app.current_art();
+            ui.horizontal(|ui| {
+                widgets::cover(ui, 56.0, lyrics_art.as_ref(), accent, pal);
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(title).size(14.0).color(pal.text).strong());
+                    let artist = app.current.as_ref().map(|t| t.display_artist().to_string()).unwrap_or_default();
+                    ui.label(RichText::new(artist).size(12.0).color(pal.muted));
+                });
+            });
             ui.add_space(10.0);
 
             if app.lyrics_loading {
@@ -1194,11 +1198,13 @@ fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         for (index, track) in queued.iter().enumerate() {
+                            let art = app.thumb(track);
                             let resp = track_row(
                                 ui,
                                 egui::Id::unique("queue_user"),
                                 index,
                                 track,
+                                art.as_ref(),
                                 liked_flags[index],
                                 accent,
                                 pal,

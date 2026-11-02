@@ -26,6 +26,7 @@ pub struct PlayRequest {
     pub start: Duration,
     pub duration: Option<Duration>,
     pub fade: Duration,
+    pub warm: Option<crate::http::HttpStream>,
 }
 
 pub enum Command {
@@ -141,7 +142,7 @@ fn run(
                     while let Ok(next) = rx.try_recv() {
                         queued.push(next);
                     }
-                    let (request, others) = coalesce_play(request, queued);
+                    let (mut request, others) = coalesce_play(request, queued);
                     for other in others.into_iter().rev() {
                         backlog.push_front(other);
                     }
@@ -157,7 +158,7 @@ fn run(
                         state.duration = request.duration;
                     }
                     let target = if crossfading { 1 - active } else { active };
-                    match load_source(&request) {
+                    match load_source(&mut request) {
                         Ok((source, duration_hint, byte_len)) => match build_decoder(source, byte_len) {
                             Ok(decoder) => {
                                 let decoder_duration = decoder.total_duration();
@@ -311,7 +312,7 @@ pub fn coalesce_play(first: Box<PlayRequest>, queued: Vec<Command>) -> (Box<Play
 type Loaded = (Box<dyn AudioSource>, Option<Duration>, Option<u64>);
 
 fn load_source(
-    request: &PlayRequest,
+    request: &mut PlayRequest,
 ) -> Result<Loaded, String> {
     match &request.track.source {
         TrackSource::Local(path) => {
@@ -329,11 +330,18 @@ fn load_source(
                 .resolved
                 .as_ref()
                 .ok_or_else(|| "Stream was not resolved".to_string())?;
-            let stream = crate::http::HttpStream::open(
-                crate::http::stream_agent(),
-                resolved.url.clone(),
-                resolved.headers.clone(),
-            )?;
+            let stream = match request.warm.take() {
+                Some(mut warmed) => {
+                    use std::io::Seek as _;
+                    let _ = warmed.seek(std::io::SeekFrom::Start(0));
+                    warmed
+                }
+                None => crate::http::HttpStream::open(
+                    crate::http::stream_agent(),
+                    resolved.url.clone(),
+                    resolved.headers.clone(),
+                )?,
+            };
             let duration = resolved.duration.or(request.duration);
             let len = stream.len();
             Ok((Box::new(stream), duration, len))
@@ -365,6 +373,7 @@ mod tests {
             start: Duration::ZERO,
             duration: None,
             fade: Duration::ZERO,
+            warm: None,
         })
     }
 

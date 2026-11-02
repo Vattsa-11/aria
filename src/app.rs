@@ -10,7 +10,7 @@ use raw_window_handle::HasWindowHandle;
 use souvlaki::MediaControls;
 
 use crate::cache::ThumbnailCache;
-use crate::jobs::{Event, Job, Jobs, ThumbJob};
+use crate::jobs::{Event, Job, Jobs};
 use crate::media_controls::{self, MediaAction};
 use crate::model::{Playlist, Track, TrackSource};
 use crate::provider::ProviderMeta;
@@ -97,6 +97,8 @@ pub struct App {
     download_cancels: Vec<(u64, Arc<std::sync::atomic::AtomicBool>)>,
 
     pub delete_all: Option<(u8, usize, u64)>,
+    warm: Option<Warmed>,
+    warm_requested: Option<u64>,
     pub download_progress: std::collections::HashMap<u64, (u64, Option<u64>)>,
 
     pub online: bool,
@@ -218,6 +220,8 @@ impl App {
             downloading: Vec::new(),
             download_cancels: Vec::new(),
             delete_all: None,
+            warm: None,
+            warm_requested: None,
             download_progress: std::collections::HashMap::new(),
             online: true,
             probe_busy: false,
@@ -422,6 +426,7 @@ impl App {
                     start,
                     duration,
                     fade,
+                    warm: None,
                 })));
             }
             (false, _) => {
@@ -431,12 +436,30 @@ impl App {
                     start,
                     duration,
                     fade,
+                    warm: None,
                 })));
             }
             (true, None) => {
-                let gen = self.play_gen;
-                self.resolving = true;
-                let _ = self.jobs.tx.send(Job::Resolve { gen, track });
+                if let Some(warmed) = self.take_warm(track.id) {
+                    let mut track = track;
+                    track.provider_meta = Some(ProviderMeta {
+                        provider: warmed.stream.provider,
+                        bitrate_kbps: warmed.stream.bitrate_kbps,
+                    });
+                    let duration = warmed.stream.duration.or(duration);
+                    self.player.send(Command::Play(Box::new(PlayRequest {
+                        track,
+                        resolved: Some(warmed.stream),
+                        start,
+                        duration,
+                        fade,
+                        warm: Some(warmed.http),
+                    })));
+                } else {
+                    let gen = self.play_gen;
+                    self.resolving = true;
+                    let _ = self.jobs.tx.send(Job::Resolve { gen, track });
+                }
             }
         }
         self.update_media_track();
@@ -1376,15 +1399,74 @@ impl App {
         format!("Downloading {}", self.downloading.len())
     }
 
-    pub fn request_thumb_by_url(&mut self, track_id: u64, url: String) {
-        if self.thumbs.get(track_id).is_some() || self.thumbs.is_pending(track_id) {
+    pub fn thumb(&mut self, track: &Track) -> Option<egui::TextureHandle> {
+        if let Some(handle) = self.thumbs.get(track.id) {
+            return Some(handle);
+        }
+        if self.thumbs.is_pending(track.id) || self.thumbs.recently_failed(track.id) {
+            return None;
+        }
+        let (source, letterboxed) = track.art_source()?;
+        self.thumbs.mark_pending(track.id);
+        self.jobs.thumbs.push(crate::cache::ThumbJob {
+            track_id: track.id,
+            source,
+            letterboxed,
+        });
+        None
+    }
+
+    pub fn current_art(&mut self) -> Option<egui::TextureHandle> {
+        let track = self.current.clone()?;
+        self.thumb(&track)
+    }
+
+    fn take_warm(&mut self, track_id: u64) -> Option<Warmed> {
+        let warmed = self.warm.take()?;
+        if warm_is_usable(warmed.track_id, track_id, warmed.at.elapsed()) {
+            Some(warmed)
+        } else {
+            None
+        }
+    }
+
+    fn next_preview(&self) -> Option<Track> {
+        self.queue
+            .user
+            .front()
+            .cloned()
+            .or_else(|| self.queue.context_preview().into_iter().next().map(|(_, track)| track.clone()))
+    }
+
+    fn maybe_warm_next(&mut self) {
+        if self.audio_state() != AudioState::Playing || self.is_offline() {
             return;
         }
-        self.thumbs.mark_pending(track_id);
-        let _ = self.jobs.thumb_tx.send(ThumbJob::Fetch {
-            track_id,
-            url,
-        });
+        let Some(next) = self.next_preview() else {
+            return;
+        };
+        let already = self.warm.as_ref().is_some_and(|warmed| warmed.track_id == next.id)
+            || self.warm_requested == Some(next.id);
+        let local = !next.is_online() || self.download_path(next.id).is_some();
+        let is_current = self.current.as_ref().is_some_and(|track| track.id == next.id);
+        if !should_warm(self.position(), local, already, is_current) {
+            return;
+        }
+        self.warm_requested = Some(next.id);
+        let _ = self.jobs.tx.send(Job::Warm { track: next });
+    }
+
+    pub fn prefetch_playback_art(&mut self) {
+        let mut upcoming: Vec<Track> = self.current.iter().cloned().collect();
+        upcoming.extend(self.queue.user.iter().take(6).cloned());
+        upcoming.extend(self.queue.context_preview().into_iter().take(6).map(|(_, track)| track.clone()));
+        self.prefetch_thumbs(&upcoming);
+    }
+
+    pub fn prefetch_thumbs(&mut self, tracks: &[Track]) {
+        for track in tracks {
+            let _ = self.thumb(track);
+        }
     }
 
     pub fn toggle_mini(&mut self) {
@@ -1555,6 +1637,8 @@ impl App {
     pub fn tick(&mut self) {
         self.update_sleep_timer();
         self.maybe_crossfade();
+        self.prefetch_playback_art();
+        self.maybe_warm_next();
         if self.lyrics_open && !self.lyrics_loading {
             if let Some(track) = self.current.as_ref() {
                 if self.lyrics_track != Some(track.id) {
@@ -1601,6 +1685,14 @@ impl App {
                         }
                     }
                 }
+                Event::Warmed { track_id, warmed } => {
+                    if self.warm_requested == Some(track_id) {
+                        self.warm_requested = None;
+                    }
+                    if let Some((stream, http)) = warmed {
+                        self.warm = Some(Warmed { track_id, stream, http, at: Instant::now() });
+                    }
+                }
                 Event::Resolved { gen, mut track, result } => {
                     if gen != self.play_gen {
                         continue;
@@ -1619,6 +1711,7 @@ impl App {
                                 start: Duration::ZERO,
                                 duration,
                                 fade: self.pending_fade,
+                                warm: None,
                             })));
                         }
                         Err(message) => {
@@ -1694,10 +1787,14 @@ impl App {
                 }
                 Event::Thumb { track_id, image } => {
                     self.thumbs.clear_pending(track_id);
-                    if let Some(image) = image {
-                        if let Some(ctx) = self.ctx.clone() {
-                            self.thumbs.insert(track_id, &ctx, image);
+                    match image {
+                        Some(image) => {
+                            if let Some(ctx) = self.ctx.clone() {
+                                self.thumbs.insert(track_id, &ctx, image);
+                                ctx.request_repaint();
+                            }
                         }
+                        None => self.thumbs.mark_failed(track_id),
                     }
                 }
                 Event::Lyrics { track_id, result } => {
@@ -1900,6 +1997,24 @@ fn collect_audio_files(folder: &std::path::Path, depth: usize) -> Vec<PathBuf> {
     found
 }
 
+pub struct Warmed {
+    track_id: u64,
+    stream: crate::provider::ResolvedStream,
+    http: crate::http::HttpStream,
+    at: Instant,
+}
+
+const WARM_MAX_AGE: Duration = Duration::from_secs(15 * 60);
+const WARM_AFTER_SECS: f64 = 5.0;
+
+pub fn warm_is_usable(warmed_id: u64, wanted_id: u64, age: Duration) -> bool {
+    warmed_id == wanted_id && age < WARM_MAX_AGE
+}
+
+pub fn should_warm(position_secs: f64, local: bool, already: bool, is_current: bool) -> bool {
+    !local && !already && !is_current && position_secs >= WARM_AFTER_SECS
+}
+
 pub fn effective_state(audio: AudioState, resolving: bool) -> AudioState {
     if resolving {
         AudioState::Loading
@@ -1936,8 +2051,25 @@ impl eframe::App for App {
 
 #[cfg(test)]
 mod state_tests {
-    use super::effective_state;
+    use super::{effective_state, should_warm, warm_is_usable};
+    use std::time::Duration;
     use crate::player::AudioState;
+
+    #[test]
+    fn next_track_is_warmed_only_when_useful() {
+        assert!(should_warm(6.0, false, false, false));
+        assert!(!should_warm(2.0, false, false, false));
+        assert!(!should_warm(30.0, true, false, false));
+        assert!(!should_warm(30.0, false, true, false));
+        assert!(!should_warm(30.0, false, false, true));
+    }
+
+    #[test]
+    fn warmed_stream_must_match_the_track_and_be_fresh() {
+        assert!(warm_is_usable(5, 5, Duration::from_secs(60)));
+        assert!(!warm_is_usable(5, 6, Duration::from_secs(60)));
+        assert!(!warm_is_usable(5, 5, Duration::from_secs(16 * 60)));
+    }
 
     #[test]
     fn resolving_counts_as_loading_so_play_cannot_start_a_second_load() {

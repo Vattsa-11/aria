@@ -127,6 +127,10 @@ fn duration_of(value: Option<&Value>) -> Option<Duration> {
 }
 
 fn image_of(value: Option<&Value>) -> Option<String> {
+    image_raw(value).map(|url| crate::model::upgrade_jiosaavn_image(&url))
+}
+
+fn image_raw(value: Option<&Value>) -> Option<String> {
     match value? {
         Value::String(text) if !text.trim().is_empty() => Some(text.trim().to_string()),
         Value::Array(items) => items
@@ -504,7 +508,7 @@ mod tests {
         assert_eq!(results[0].duration, Some(Duration::from_secs(362)));
         assert_eq!(
             results[0].thumb.as_deref(),
-            Some("https://c.saavncdn.com/475/cover-150x150.jpg")
+            Some("https://c.saavncdn.com/475/cover-500x500.jpg")
         );
         assert_eq!(results[1].track_id, "553426");
         assert_eq!(results[1].duration, Some(Duration::from_secs(262)));

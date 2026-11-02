@@ -671,20 +671,13 @@ fn volume_slider(
     None
 }
 
-fn art(ui: &Ui, rect: Rect, accent: Color32, pal: &Palette) {
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(12), pal.raised);
+fn art(ui: &Ui, rect: Rect, texture: Option<&egui::TextureHandle>, accent: Color32, pal: &Palette) {
+    crate::ui::widgets::paint_cover(ui.painter(), rect, texture, 12, accent, pal);
     ui.painter().rect_stroke(
         rect,
         CornerRadius::same(12),
         Stroke::new(1.0, pal.line),
         StrokeKind::Inside,
-    );
-    icons::draw(
-        ui.painter(),
-        Rect::from_center_size(rect.center(), Vec2::splat(rect.width() * 0.34)),
-        Icon::Note,
-        accent.gamma_multiply(0.9),
     );
 }
 
@@ -967,7 +960,8 @@ fn large(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette)
         egui::pos2(rect.center().x - art_size * 0.5, rect.min.y + pad),
         Vec2::splat(art_size),
     );
-    art(ui, art_rect, accent, pal);
+    let current_art = app.current_art();
+    art(ui, art_rect, current_art.as_ref(), accent, pal);
     gestures(app, ui, art_rect);
 
     let heart_size = 40.0;
@@ -1039,18 +1033,18 @@ fn large(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette)
     );
     volume_row(app, ui, volume, accent, pal);
 
-    let upcoming: Vec<(bool, usize, String, String)> = {
-        let mut rows: Vec<(bool, usize, String, String)> = app
+    let upcoming: Vec<(bool, usize, crate::model::Track)> = {
+        let mut rows: Vec<(bool, usize, crate::model::Track)> = app
             .queue
             .user
             .iter()
             .take(4)
             .enumerate()
-            .map(|(index, track)| (true, index, track.title.clone(), track.display_artist().to_string()))
+            .map(|(index, track)| (true, index, track.clone()))
             .collect();
         if rows.len() < 4 {
             for (index, track) in app.queue.context_preview().into_iter().take(4 - rows.len()) {
-                rows.push((false, index, track.title.clone(), track.display_artist().to_string()));
+                rows.push((false, index, track.clone()));
             }
         }
         rows
@@ -1071,7 +1065,10 @@ fn large(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette)
 
     let mut jump_user: Option<usize> = None;
     let mut jump_context: Option<usize> = None;
-    for (is_user, index, title, artist) in &upcoming {
+    for (is_user, index, queued_track) in &upcoming {
+        let title = &queued_track.title;
+        let artist = queued_track.display_artist();
+        let queued_art = app.thumb(queued_track);
         if y + row_height > rect.max.y - pad {
             break;
         }
@@ -1088,7 +1085,7 @@ fn large(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette)
             egui::pos2(row.min.x + 4.0, row.center().y - 15.0),
             Vec2::splat(30.0),
         );
-        queue_thumb(ui, thumb, accent, pal);
+        crate::ui::widgets::paint_cover(ui.painter(), thumb, queued_art.as_ref(), 6, accent, pal);
         let text_left = thumb.max.x + 8.0;
         let text_right = row.max.x - 6.0;
         text_line(
@@ -1130,22 +1127,13 @@ fn large(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette)
     }
 }
 
-fn queue_thumb(ui: &Ui, rect: Rect, accent: Color32, pal: &Palette) {
-    ui.painter().rect_filled(rect, CornerRadius::same(6), pal.raised);
-    icons::draw(
-        ui.painter(),
-        Rect::from_center_size(rect.center(), Vec2::splat(rect.width() * 0.46)),
-        Icon::Note,
-        accent.gamma_multiply(0.8),
-    );
-}
-
 fn medium(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette) {
     let pad = 12.0;
     let available = rect.height() - pad * 2.0;
     let art_size = available.min(140.0).min(rect.width() * 0.38);
     let art_rect = Rect::from_min_size(egui::pos2(rect.min.x + pad, rect.min.y + pad), Vec2::splat(art_size));
-    art(ui, art_rect, accent, pal);
+    let current_art = app.current_art();
+    art(ui, art_rect, current_art.as_ref(), accent, pal);
     gestures(app, ui, art_rect);
 
     let text_x = art_rect.max.x + 12.0;
@@ -1243,7 +1231,8 @@ fn compact(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palett
         egui::pos2(rect.min.x + pad, rect.center().y - 1.5 - art_size * 0.5),
         Vec2::splat(art_size),
     );
-    art(ui, art_rect, accent, pal);
+    let current_art = app.current_art();
+    art(ui, art_rect, current_art.as_ref(), accent, pal);
     gestures(app, ui, art_rect);
 
     let play_size = 44.0;

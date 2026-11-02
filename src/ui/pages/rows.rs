@@ -4,6 +4,12 @@ use crate::ui::icons::Icon;
 use crate::ui::theme::Palette;
 
 pub const ROW_H: f32 = 64.0;
+
+pub fn window(tracks: &[Track], visible: &std::ops::Range<usize>) -> Vec<Track> {
+    let start = visible.start.saturating_sub(6).min(tracks.len());
+    let end = (visible.end + 14).min(tracks.len());
+    tracks[start..end.max(start)].to_vec()
+}
 pub const MIN_HIT: f32 = 44.0;
 
 #[derive(Default)]
@@ -196,6 +202,7 @@ pub fn track_row(
     id_salt: egui::Id,
     index: usize,
     track: &Track,
+    art: Option<&egui::TextureHandle>,
     liked: bool,
     accent: egui::Color32,
     pal: &Palette,
@@ -247,14 +254,7 @@ pub fn track_row(
         egui::pos2(rect.min.x + 10.0, rect.center().y - art_w * 0.5),
         egui::Vec2::splat(art_w),
     );
-    ui.painter()
-        .rect_filled(art_rect, egui::CornerRadius::same(6), pal.surface);
-    crate::ui::icons::draw(
-        ui.painter(),
-        egui::Rect::from_center_size(art_rect.center(), egui::Vec2::splat(art_w * 0.5)),
-        Icon::Note,
-        accent.gamma_multiply(0.85),
-    );
+    crate::ui::widgets::paint_cover(ui.painter(), art_rect, art, 6, accent, pal);
 
     let mut right = rect.max.x - 10.0;
 
@@ -425,6 +425,17 @@ pub fn track_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prefetch_window_extends_past_the_visible_rows() {
+        let tracks: Vec<Track> = (0..100)
+            .map(|n| Track::local(std::path::Path::new(&format!("/m/{n}.mp3"))))
+            .collect();
+        assert_eq!(window(&tracks, &(10..20)).len(), 6 + 10 + 14);
+        assert_eq!(window(&tracks, &(0..8)).len(), 8 + 14);
+        assert_eq!(window(&tracks, &(90..100)).len(), 10 + 6);
+        assert!(window(&[], &(0..0)).is_empty());
+    }
 
     fn view() -> MenuView {
         MenuView {

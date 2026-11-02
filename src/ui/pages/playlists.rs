@@ -267,19 +267,23 @@ pub fn playlist_detail(app: &mut App, ui: &mut egui::Ui, index: usize) {
     let mut like_index: Option<usize> = None;
     let mut remove_index: Option<usize> = None;
 
+    let mut visible = 0..0;
     egui::ScrollArea::vertical()
         .scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, ..Default::default() })
         .auto_shrink([false, false])
         .show_rows(ui, crate::ui::pages::rows::ROW_H, playlist.tracks.len(), |ui, range| {
+        visible = range.clone();
         for track_index in range {
             let track = playlist.tracks[track_index].clone();
             let liked = app.is_liked(track.id);
             let (dim, badge) = app.row_state(&track);
+            let art = app.thumb(&track);
             let resp = track_row(
                 ui,
                 salt,
                 track_index,
                 &track,
+                art.as_ref(),
                 liked,
                 accent,
                 &pal,
@@ -324,6 +328,8 @@ pub fn playlist_detail(app: &mut App, ui: &mut egui::Ui, index: usize) {
     if let Some(track_index) = remove_index {
         app.remove_from_playlist(index, track_index);
     }
+    let ahead = crate::ui::pages::rows::window(&playlist.tracks, &visible);
+    app.prefetch_thumbs(&ahead);
     crate::ui::pages::rows::row_menus(app, rows, crate::ui::pages::rows::MenuKind::Standard, &pal);
     ui.add_space(20.0);
 }

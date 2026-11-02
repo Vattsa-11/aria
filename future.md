@@ -41,3 +41,10 @@ Needs a public repository or a token option. Nothing downloads without a button 
 Direct HTTP download for JioSaavn and other online tracks, heart and icon set, cover art,
 search quality scoring, lyrics lookup, sleep timer modes, Spotify link import and paste,
 touch keyboard, first-run yt-dlp and ffmpeg setup, README rewrite.
+
+## Cover art follow-ups
+
+- Embedded cover art from local files (ID3, MP4, FLAC tags). Today local files only use
+  a `cover`, `folder`, `front`, `album` or `albumart` image next to the file.
+- YouTube Music square album art instead of the video thumbnail.
+- Disk cache size cap for `thumbs/` (memory is capped, disk is not).

@@ -87,17 +87,21 @@ pub fn downloads(app: &mut App, ui: &mut egui::Ui) {
     let mut play: Option<usize> = None;
     let mut like_index: Option<usize> = None;
 
+    let mut visible = 0..0;
     egui::ScrollArea::vertical().scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, ..Default::default() })
         .auto_shrink([false, false])
         .show_rows(ui, crate::ui::pages::rows::ROW_H, app.downloads.len(), |ui, range| {
+        visible = range.clone();
         for index in range {
             let track = app.downloads[index].clone();
             let liked = app.is_liked(track.id);
+            let art = app.thumb(&track);
             let resp = track_row(
                 ui,
                 salt,
                 index,
                 &track,
+                art.as_ref(),
                 liked,
                 accent,
                 &pal,
@@ -126,6 +130,8 @@ pub fn downloads(app: &mut App, ui: &mut egui::Ui) {
             app.toggle_like_track(&track);
         }
     }
+    let ahead = crate::ui::pages::rows::window(&app.downloads, &visible);
+    app.prefetch_thumbs(&ahead);
     crate::ui::pages::rows::row_menus(app, rows, crate::ui::pages::rows::MenuKind::Downloads, &pal);
     ui.add_space(20.0);
 }
