@@ -286,16 +286,7 @@ pub fn search(app: &mut App, ui: &mut Ui) {
         return;
     }
     if app.search.results.is_empty() {
-        ui.vertical_centered(|ui| {
-            ui.add_space(40.0);
-            ui.label(RichText::new("Find songs to play").size(16.0).color(pal.muted));
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new("Results play instantly and can be queued or saved later.")
-                    .size(13.0)
-                    .color(pal.muted),
-            );
-        });
+        suggestions(app, ui, accent, &pal);
         return;
     }
 
@@ -357,5 +348,116 @@ pub fn search(app: &mut App, ui: &mut Ui) {
 
     if let Some(index) = play {
         app.play_search_result(index);
+    }
+}
+
+fn chip_row(ui: &mut Ui, labels: &[String], accent: egui::Color32, pal: &Palette) -> Option<String> {
+    let mut picked = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        for label in labels {
+            if pill_button(ui, label, false, accent, pal) {
+                picked = Some(label.clone());
+            }
+        }
+    });
+    picked
+}
+
+fn heading(ui: &mut Ui, text: &str, pal: &Palette) {
+    ui.add_space(8.0);
+    ui.label(RichText::new(text).size(16.0).color(pal.text).strong());
+    ui.add_space(6.0);
+}
+
+fn suggestions(app: &mut App, ui: &mut Ui, accent: egui::Color32, pal: &Palette) {
+    use crate::settings::RegionMode;
+    let mut run: Option<String> = None;
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            if !app.settings.recent_searches.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Recent searches").size(16.0).color(pal.text).strong());
+                    if pill_button(ui, "Clear", false, accent, pal) {
+                        app.settings.recent_searches.clear();
+                        app.touch_settings();
+                    }
+                });
+                ui.add_space(6.0);
+                let recent = app.settings.recent_searches.clone();
+                if let Some(query) = chip_row(ui, &recent, accent, pal) {
+                    run = Some(query);
+                }
+            }
+
+            let artists = crate::suggest::top_artists(&[&app.history, &app.liked], 4);
+            if !artists.is_empty() {
+                heading(ui, "Based on your listening", pal);
+                if let Some(query) = chip_row(ui, &artists, accent, pal) {
+                    run = Some(query);
+                }
+            }
+
+            let language = app.settings.region_language.clone();
+            let label = language.as_deref().map(crate::region::language_label);
+            heading(ui, "Quick starts", pal);
+            if let Some(query) = chip_row(ui, &crate::suggest::quick_starts(label), accent, pal) {
+                run = Some(query);
+            }
+
+            match app.settings.region_mode {
+                RegionMode::Auto | RegionMode::Manual if !app.trending.is_empty() => {
+                    let title = crate::region::trending_title(
+                        app.settings.region_label.as_deref(),
+                        language.as_deref().unwrap_or(""),
+                    );
+                    heading(ui, &title, pal);
+                    let tracks: Vec<crate::model::Track> = app.trending.iter().take(12).cloned().collect();
+                    let salt = egui::Id::unique("search_suggestions");
+                    let mut play: Option<usize> = None;
+                    let mut rows: Vec<(Response, crate::model::Track)> = Vec::new();
+                    for (index, track) in tracks.iter().enumerate() {
+                        let art = app.thumb(track);
+                        let liked = app.is_liked(track.id);
+                        let resp = crate::ui::pages::rows::track_row(
+                            ui, salt, index, track, art.as_ref(), liked, accent, pal, false, false, None, false, None,
+                        );
+                        if resp.clicked {
+                            play = Some(index);
+                        } else if resp.like.clicked() {
+                            app.toggle_like_track(track);
+                        }
+                        rows.push((resp.menu, track.clone()));
+                    }
+                    crate::ui::pages::rows::row_menus(app, rows, crate::ui::pages::rows::MenuKind::Standard, pal);
+                    if let Some(index) = play {
+                        app.play_trending(index);
+                    }
+                }
+                RegionMode::Ask | RegionMode::Off => {
+                    heading(ui, "Trending near you", pal);
+                    ui.label(
+                        RichText::new("Turn on regional suggestions to see songs trending in your state.")
+                            .size(13.0)
+                            .color(pal.muted),
+                    );
+                    ui.add_space(6.0);
+                    if pill_button(ui, "Show trending for my region", false, accent, pal) {
+                        app.set_region_mode(RegionMode::Auto);
+                    }
+                }
+                _ => {
+                    if app.trending_loading || app.geo_loading {
+                        heading(ui, "Trending near you", pal);
+                        ui.label(RichText::new("Loading...").size(13.0).color(pal.muted));
+                    }
+                }
+            }
+            ui.add_space(20.0);
+        });
+    if let Some(query) = run {
+        app.search.query = query;
+        app.run_search();
     }
 }

@@ -1392,6 +1392,8 @@ impl App {
             );
             return;
         }
+        crate::suggest::push_recent(&mut self.settings.recent_searches, &query);
+        self.touch_settings();
         self.search.running = true;
         self.search.started = true;
         self.search.error = None;

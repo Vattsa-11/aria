@@ -24,6 +24,7 @@ mod region;
 mod settings;
 mod sleep;
 mod stats;
+mod suggest;
 mod ui;
 mod writer;
 mod ytdlp;

@@ -43,6 +43,7 @@ pub fn root(app: &mut App, ui: &mut Ui) {
         side_nav(app, ui, accent, &pal);
     }
 
+    widgets::set_loading(app.audio_state() == crate::player::AudioState::Loading);
     central(app, ui);
 
     if app.toast.is_some() {
@@ -295,12 +296,7 @@ fn bar_play_button(
     };
     ui.painter()
         .circle_filled(rect.center(), rect.width() * 0.5, fill);
-    icons::draw(
-        ui.painter(),
-        Rect::from_center_size(rect.center(), Vec2::splat(rect.width() * 0.42)),
-        if playing { Icon::Pause } else { Icon::Play },
-        Color32::from_rgb(12, 12, 15),
-    );
+    widgets::paint_play_glyph(ui, rect, if playing { Icon::Pause } else { Icon::Play }, Color32::from_rgb(12, 12, 15));
     response
 }
 

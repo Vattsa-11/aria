@@ -136,6 +136,42 @@ pub fn accent_button(ui: &mut Ui, label: &str, size: Vec2, accent: Color32) -> b
     response.clicked()
 }
 
+static LOADING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_loading(loading: bool) {
+    LOADING.store(loading, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn spinner_points(center: egui::Pos2, radius: f32, time: f64) -> Vec<egui::Pos2> {
+    let start = (time * 4.5) as f32;
+    (0..=18)
+        .map(|step| {
+            let angle = start + step as f32 * (std::f32::consts::PI * 1.5 / 18.0);
+            egui::pos2(center.x + radius * angle.cos(), center.y + radius * angle.sin())
+        })
+        .collect()
+}
+
+pub fn paint_play_glyph(ui: &Ui, rect: Rect, icon: Icon, color: Color32) {
+    let is_play = matches!(icon, Icon::Play | Icon::Pause);
+    if is_play && LOADING.load(std::sync::atomic::Ordering::Relaxed) {
+        let radius = rect.width() * 0.22;
+        let time = ui.input(|input| input.time);
+        ui.painter().add(egui::Shape::line(
+            spinner_points(rect.center(), radius, time),
+            Stroke::new((rect.width() * 0.07).max(2.0), color),
+        ));
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+    } else {
+        icons::draw(
+            ui.painter(),
+            Rect::from_center_size(rect.center(), Vec2::splat(rect.width() * 0.42)),
+            icon,
+            color,
+        );
+    }
+}
+
 pub fn primary_icon_button(ui: &mut Ui, icon: Icon, size: f32, accent: Color32) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
     let radius = size * 0.5;
@@ -145,12 +181,7 @@ pub fn primary_icon_button(ui: &mut Ui, icon: Icon, size: f32, accent: Color32) 
         accent
     };
     ui.painter().circle_filled(rect.center(), radius, fill);
-    icons::draw(
-        ui.painter(),
-        Rect::from_center_size(rect.center(), Vec2::splat(size * 0.42)),
-        icon,
-        Color32::from_rgb(12, 12, 15),
-    );
+    paint_play_glyph(ui, rect, icon, Color32::from_rgb(12, 12, 15));
     response
 }
 
@@ -262,4 +293,22 @@ pub fn pill_button(ui: &mut Ui, label: &str, active: bool, accent: Color32, pal:
         },
     );
     response.clicked()
+}
+
+#[cfg(test)]
+mod spinner_tests {
+    use super::spinner_points;
+
+    #[test]
+    fn spinner_arc_rotates_and_stays_on_the_circle() {
+        let center = egui::pos2(10.0, 10.0);
+        let first = spinner_points(center, 8.0, 0.0);
+        let later = spinner_points(center, 8.0, 0.5);
+        assert_eq!(first.len(), 19);
+        assert_ne!(first[0], later[0]);
+        for point in first.iter().chain(later.iter()) {
+            let distance = ((point.x - 10.0).powi(2) + (point.y - 10.0).powi(2)).sqrt();
+            assert!((distance - 8.0).abs() < 0.01);
+        }
+    }
 }

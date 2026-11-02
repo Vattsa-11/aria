@@ -589,12 +589,7 @@ fn play_button(ui: &mut Ui, id: egui::Id, rect: Rect, playing: bool, accent: Col
     };
     ui.painter()
         .circle_filled(rect.center(), rect.width() * 0.5, fill);
-    icons::draw(
-        ui.painter(),
-        Rect::from_center_size(rect.center(), Vec2::splat(rect.width() * 0.42)),
-        if playing { Icon::Pause } else { Icon::Play },
-        Color32::from_rgb(12, 12, 15),
-    );
+    crate::ui::widgets::paint_play_glyph(ui, rect, if playing { Icon::Pause } else { Icon::Play }, Color32::from_rgb(12, 12, 15));
     response
 }
 
