@@ -218,6 +218,14 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<Track>, String> {
     Ok(tracks)
 }
 
+pub fn is_youtube_mix(url: &str) -> bool {
+    let query = url.split_once('?').map(|(_, query)| query).unwrap_or(url);
+    query
+        .split(['&', '#'])
+        .filter_map(|pair| pair.strip_prefix("list="))
+        .any(|list| list.starts_with("RD") && !list.starts_with("RDCLAK"))
+}
+
 pub fn playlist_tracks(url: &str) -> Result<Vec<Track>, String> {
     let raw = run(&[
         "--flat-playlist",
@@ -475,6 +483,22 @@ pub fn download_latest() -> Result<PathBuf, String> {
         let _ = std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o755));
     }
     Ok(destination)
+}
+
+#[cfg(test)]
+mod mix_tests {
+    use super::is_youtube_mix;
+
+    #[test]
+    fn detects_generated_youtube_mixes_but_not_real_playlists() {
+        assert!(is_youtube_mix("https://www.youtube.com/watch?v=KvMY1uzSC1E&list=RDKvMY1uzSC1E&start_radio=1"));
+        assert!(is_youtube_mix("https://www.youtube.com/watch?v=abc&list=RDMM"));
+        assert!(is_youtube_mix("https://music.youtube.com/watch?v=abc&list=RDAMVMabc"));
+        assert!(!is_youtube_mix("https://www.youtube.com/playlist?list=PLabc123"));
+        assert!(!is_youtube_mix("https://music.youtube.com/playlist?list=RDCLAK5uy_kabc"));
+        assert!(!is_youtube_mix("https://www.youtube.com/watch?v=RDabc"));
+        assert!(!is_youtube_mix("not a url"));
+    }
 }
 
 #[cfg(test)]

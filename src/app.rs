@@ -1894,6 +1894,9 @@ impl App {
                                 self.import.new_playlist = "Imported playlist".to_string();
                             }
                             self.page = Page::Import;
+                            if crate::ytdlp::is_youtube_mix(&self.import.url) {
+                                self.notify("YouTube Mix: YouTube builds it on the fly, so this is a snapshot that can differ from the browser");
+                            }
                         }
                     }
                 }
