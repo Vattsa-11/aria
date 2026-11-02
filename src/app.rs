@@ -17,7 +17,7 @@ use crate::provider::ProviderMeta;
 use crate::player::{AudioState, Command, PlayRequest, PlayerHandle};
 use crate::queue::{Advance, Queue, TrackOrigin};
 use crate::queue::TrackMenuAction;
-use crate::settings::{self, RepeatMode, Settings};
+use crate::settings::{self, RegionMode, RepeatMode, Settings};
 use crate::ui::theme;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -98,6 +98,10 @@ pub struct App {
 
     pub delete_all: Option<(u8, usize, u64)>,
     warm: Option<Warmed>,
+    pub trending: Vec<Track>,
+    pub trending_loading: bool,
+    pub trending_error: Option<String>,
+    pub geo_loading: bool,
     warm_requested: Option<u64>,
     pub download_progress: std::collections::HashMap<u64, (u64, Option<u64>)>,
 
@@ -203,7 +207,7 @@ impl App {
             .collect();
         let accent_hex = theme::accent_hex(&settings);
 
-        let app = Self {
+        let mut app = Self {
             settings,
             player,
             tracks,
@@ -222,6 +226,10 @@ impl App {
             download_cancels: Vec::new(),
             delete_all: None,
             warm: None,
+            trending: Vec::new(),
+            trending_loading: false,
+            trending_error: None,
+            geo_loading: false,
             warm_requested: None,
             download_progress: std::collections::HashMap::new(),
             online: true,
@@ -280,6 +288,7 @@ impl App {
             last_media_position: u64::MAX,
         };
         let _ = app.jobs.tx.send(Job::EnsureYtDlp);
+        app.refresh_trending();
         app
     }
 
@@ -1485,6 +1494,65 @@ impl App {
         }
     }
 
+    pub fn refresh_trending(&mut self) {
+        let wants = matches!(self.settings.region_mode, RegionMode::Auto | RegionMode::Manual);
+        let language = self.settings.region_language.clone().filter(|language| crate::region::is_known_language(language));
+        match (wants, language) {
+            (true, Some(language)) => {
+                self.trending_loading = true;
+                self.trending_error = None;
+                let _ = self.jobs.tx.send(Job::Trending { language });
+            }
+            _ => {
+                self.trending.clear();
+                self.trending_loading = false;
+            }
+        }
+    }
+
+    pub fn set_region_mode(&mut self, mode: RegionMode) {
+        self.settings.region_mode = mode;
+        self.trending_error = None;
+        match mode {
+            RegionMode::Auto => {
+                self.geo_loading = true;
+                let _ = self.jobs.tx.send(Job::Region);
+            }
+            RegionMode::Off => {
+                self.trending.clear();
+                self.trending_loading = false;
+                self.geo_loading = false;
+            }
+            RegionMode::Manual | RegionMode::Ask => self.refresh_trending(),
+        }
+        self.touch_settings();
+    }
+
+    pub fn choose_region_language(&mut self, language: &str) {
+        if !crate::region::is_known_language(language) {
+            return;
+        }
+        self.settings.region_mode = RegionMode::Manual;
+        self.settings.region_language = Some(language.to_string());
+        self.settings.region_label = None;
+        self.geo_loading = false;
+        self.touch_settings();
+        self.refresh_trending();
+    }
+
+    pub fn play_trending(&mut self, index: usize) {
+        let Some(track) = self.trending.get(index).cloned() else {
+            return;
+        };
+        let name = crate::region::trending_title(
+            self.settings.region_label.as_deref(),
+            self.settings.region_language.as_deref().unwrap_or(""),
+        );
+        self.queue.set_context(self.trending.clone(), name);
+        self.queue.mark_context_playing(index);
+        self.start_track(track, TrackOrigin::Context, Duration::ZERO);
+    }
+
     pub fn toggle_mini(&mut self) {
         self.mini.toggle();
         self.touch_settings();
@@ -1698,6 +1766,38 @@ impl App {
                         None => {
                             self.search.error = None;
                             self.search.results = results;
+                        }
+                    }
+                }
+                Event::Region { result } => {
+                    self.geo_loading = false;
+                    match result {
+                        Ok(geo) => {
+                            let language = crate::region::language_for(&geo);
+                            self.settings.region_language = Some(language.to_string());
+                            self.settings.region_label = Some(geo.region.clone()).filter(|region| !region.is_empty());
+                            self.touch_settings();
+                            self.refresh_trending();
+                        }
+                        Err(message) => {
+                            crate::logs::error(&message);
+                            self.trending_error = Some(message);
+                        }
+                    }
+                }
+                Event::Trending { language, tracks, error } => {
+                    if self.settings.region_language.as_deref() != Some(language.as_str()) {
+                        continue;
+                    }
+                    self.trending_loading = false;
+                    match error {
+                        Some(message) => {
+                            crate::logs::error(&format!("trending {language}: {message}"));
+                            self.trending_error = Some(message);
+                        }
+                        None => {
+                            self.trending_error = None;
+                            self.trending = tracks;
                         }
                     }
                 }

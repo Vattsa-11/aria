@@ -172,6 +172,9 @@ fn artist_of(entry: &Value) -> String {
 }
 
 fn entries_of(json: &Value) -> Vec<Value> {
+    if let Some(items) = json.as_array() {
+        return items.clone();
+    }
     if let Some(items) = json.get("results").and_then(Value::as_array) {
         return items.clone();
     }
@@ -187,6 +190,15 @@ fn entries_of(json: &Value) -> Vec<Value> {
         return items.clone();
     }
     Vec::new()
+}
+
+pub fn unescape_html(text: &str) -> String {
+    text.replace("&quot;", "\"")
+        .replace("&#039;", "'")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 pub fn parse_search(json: &Value) -> Vec<MetadataResult> {
@@ -207,8 +219,8 @@ pub fn parse_search(json: &Value) -> Vec<MetadataResult> {
         let thumb = image_of(entry.get("image"));
         results.push(MetadataResult {
             track_id,
-            title,
-            artist: artist_of(&entry),
+            title: unescape_html(&title),
+            artist: unescape_html(&artist_of(&entry)),
             duration,
             thumb,
             provider: ProviderName::Jiosaavn,
@@ -337,6 +349,31 @@ pub fn parse_stream(json: &Value) -> Result<(String, Option<Duration>, u16), Str
     let duration = duration_of(info.get("duration"));
     let (url, kbps) = upgrade_quality(&decrypted, high);
     Ok((url, duration, kbps))
+}
+
+pub fn trending(language: &str, limit: usize) -> Result<Vec<MetadataResult>, String> {
+    if !crate::region::is_known_language(language) {
+        return Err("Unknown language".to_string());
+    }
+    let mut errors = Vec::new();
+    for base in bases().into_iter().filter(|base| mode_of(base) == Mode::Direct) {
+        let url = format!(
+            "{base}?__call=content.getTrending&entity_type=song&entity_language={language}&{API_PARAMS}"
+        );
+        match get_json(&url) {
+            Ok(json) => {
+                let mut results = parse_search(&json);
+                results.truncate(limit);
+                if results.is_empty() {
+                    errors.push("no trending songs returned".to_string());
+                } else {
+                    return Ok(results);
+                }
+            }
+            Err(err) => errors.push(err),
+        }
+    }
+    Err(join_paths(errors))
 }
 
 fn search_at(base: &str, query: &str, limit: usize) -> Result<Vec<MetadataResult>, String> {
@@ -514,6 +551,23 @@ mod tests {
         assert_eq!(results[1].duration, Some(Duration::from_secs(262)));
         assert!(results[1].thumb.is_none());
         assert_eq!(results[0].provider, ProviderName::Jiosaavn);
+    }
+
+    #[test]
+    fn parses_a_trending_list_with_html_entities() {
+        let json: Value = serde_json::from_str(
+            r#"[{"id":"a1","title":"Ordinary Person (From &quot;Leo&quot;)","subtitle":"Anirudh Ravichander - Leo - Tamil","image":"https://c.saavncdn.com/x-150x150.jpg","more_info":{"duration":"230"}},
+                {"id":"a2","title":"Rock &amp; Roll","subtitle":"Band","image":""}]"#,
+        )
+        .expect("fixture");
+        let results = parse_search(&json);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "Ordinary Person (From \"Leo\")");
+        assert_eq!(results[0].artist, "Anirudh Ravichander");
+        assert_eq!(results[0].duration, Some(Duration::from_secs(230)));
+        assert_eq!(results[0].thumb.as_deref(), Some("https://c.saavncdn.com/x-500x500.jpg"));
+        assert_eq!(results[1].title, "Rock & Roll");
+        assert!(trending("not a language", 5).is_err());
     }
 
     #[test]

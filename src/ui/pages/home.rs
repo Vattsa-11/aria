@@ -18,6 +18,7 @@ enum Action {
     PlayRecent(usize),
     PlayPick(PickSource),
     PlayLibrary(usize),
+    PlayTrending(usize),
 }
 
 pub fn home(app: &mut App, ui: &mut egui::Ui) {
@@ -49,11 +50,12 @@ pub fn home(app: &mut App, ui: &mut egui::Ui) {
             ui.add_space(14.0);
 
             shortcut_grid(app, ui, &pal, accent, &mut actions);
+            trending_section(app, ui, &pal, accent, &mut actions);
 
             if !app.history.is_empty() {
                 section(ui, "Recently played", &pal);
                 let recent: Vec<Track> = app.history.iter().take(12).cloned().collect();
-                track_strip(app, ui, &recent, &pal, accent, &mut actions, true);
+                track_strip(app, ui, &recent, &pal, accent, &mut actions, Action::PlayRecent);
                 ui.add_space(10.0);
             }
 
@@ -167,6 +169,7 @@ pub fn home(app: &mut App, ui: &mut egui::Ui) {
             Action::PlayPlaylist(index, track) => app.play_playlist(index, track),
             Action::PlayRecent(index) => app.play_history(index),
             Action::PlayLibrary(index) => app.play_library(index),
+            Action::PlayTrending(index) => app.play_trending(index),
             Action::PlayPick(PickSource::Liked(index)) => app.play_liked(index),
             Action::PlayPick(PickSource::Library(index)) => app.play_library(index),
         }
@@ -201,6 +204,91 @@ fn quick_picks(app: &App) -> Vec<(Track, PickSource)> {
 
 fn greeting() -> &'static str {
     "Good to see you"
+}
+
+fn trending_section(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    pal: &Palette,
+    accent: Color32,
+    actions: &mut Vec<Action>,
+) {
+    use crate::settings::RegionMode;
+    match app.settings.region_mode {
+        RegionMode::Off => {}
+        RegionMode::Ask => {
+            egui::Frame::new()
+                .fill(pal.raised)
+                .corner_radius(egui::CornerRadius::same(14))
+                .inner_margin(egui::Margin::same(16))
+                .show(ui, |ui| {
+                    ui.label(RichText::new("Songs trending near you?").size(18.0).color(pal.text).strong());
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(
+                            "Aria can show what is trending for your state, such as Tamil songs in Tamil Nadu. \"Use my location\" looks up your approximate state from your IP address once, using ipwho.is, and stores only the state and language. Or choose a language yourself with no lookup.",
+                        )
+                        .size(12.5)
+                        .color(pal.muted),
+                    );
+                    ui.add_space(10.0);
+                    ui.horizontal_wrapped(|ui| {
+                        if crate::ui::widgets::accent_button(ui, "Use my location", egui::vec2(170.0, 40.0), accent) {
+                            app.set_region_mode(RegionMode::Auto);
+                        }
+                        for (id, label) in [("hindi", "Hindi"), ("tamil", "Tamil"), ("telugu", "Telugu"), ("malayalam", "Malayalam"), ("english", "English")] {
+                            if crate::ui::widgets::pill_button(ui, label, false, accent, pal) {
+                                app.choose_region_language(id);
+                            }
+                        }
+                        if crate::ui::widgets::pill_button(ui, "Not now", false, accent, pal) {
+                            app.set_region_mode(RegionMode::Off);
+                        }
+                    });
+                });
+            ui.add_space(10.0);
+        }
+        RegionMode::Auto | RegionMode::Manual => {
+            let language = app.settings.region_language.clone().unwrap_or_default();
+            if app.geo_loading {
+                section(ui, "Trending near you", pal);
+                ui.label(RichText::new("Finding your region...").size(13.0).color(pal.muted));
+                ui.add_space(10.0);
+                return;
+            }
+            if language.is_empty() {
+                if let Some(error) = app.trending_error.clone() {
+                    section(ui, "Trending near you", pal);
+                    ui.label(RichText::new(error).size(13.0).color(pal.muted));
+                    ui.horizontal_wrapped(|ui| {
+                        for (id, label) in [("hindi", "Hindi"), ("tamil", "Tamil"), ("telugu", "Telugu"), ("malayalam", "Malayalam"), ("english", "English")] {
+                            if crate::ui::widgets::pill_button(ui, label, false, accent, pal) {
+                                app.choose_region_language(id);
+                            }
+                        }
+                    });
+                    ui.add_space(10.0);
+                }
+                return;
+            }
+            let title = crate::region::trending_title(app.settings.region_label.as_deref(), &language);
+            section(ui, &title, pal);
+            if app.trending.is_empty() {
+                if app.trending_loading {
+                    ui.label(RichText::new("Loading trending songs...").size(13.0).color(pal.muted));
+                } else if let Some(error) = app.trending_error.clone() {
+                    ui.label(RichText::new(format!("Could not load trending songs: {error}")).size(13.0).color(pal.muted));
+                    if crate::ui::widgets::pill_button(ui, "Retry", false, accent, pal) {
+                        app.refresh_trending();
+                    }
+                }
+            } else {
+                let tracks = app.trending.clone();
+                track_strip(app, ui, &tracks, pal, accent, actions, Action::PlayTrending);
+            }
+            ui.add_space(10.0);
+        }
+    }
 }
 
 fn section(ui: &mut egui::Ui, title: &str, pal: &Palette) {
@@ -295,7 +383,7 @@ fn track_strip(
     pal: &Palette,
     accent: Color32,
     actions: &mut Vec<Action>,
-    recent: bool,
+    play: fn(usize) -> Action,
 ) {
     ui.horizontal_wrapped(|ui| {
         for (index, track) in tracks.iter().enumerate() {
@@ -328,11 +416,7 @@ fn track_strip(
                 pal.muted,
             );
             if response.clicked() {
-                actions.push(if recent {
-                    Action::PlayRecent(index)
-                } else {
-                    Action::PlayLibrary(index)
-                });
+                actions.push(play(index));
             }
         }
     });

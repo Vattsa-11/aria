@@ -20,6 +20,7 @@ mod player;
 mod proc;
 mod queue;
 mod radio;
+mod region;
 mod settings;
 mod sleep;
 mod stats;

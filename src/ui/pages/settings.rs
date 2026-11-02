@@ -471,6 +471,56 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
 
             ui.add_space(12.0);
 
+            section(ui, &pal, "Region suggestions");
+            card(ui, &pal, |ui| {
+                ui.label(RichText::new("Trending songs for your region").size(16.0).color(pal.text));
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(
+                        "Shows trending songs on Home. \"My location\" looks up your approximate state from your IP address through ipwho.is each time you press it; nothing is stored except the state and language. Choosing a language yourself sends no location at all.",
+                    )
+                    .size(12.5)
+                    .color(pal.muted),
+                );
+                ui.add_space(10.0);
+                let mode = app.settings.region_mode;
+                ui.horizontal_wrapped(|ui| {
+                    if crate::ui::widgets::pill_button(ui, "Off", mode == crate::settings::RegionMode::Off, accent, &pal) {
+                        app.set_region_mode(crate::settings::RegionMode::Off);
+                    }
+                    if crate::ui::widgets::pill_button(ui, "My location", mode == crate::settings::RegionMode::Auto, accent, &pal) {
+                        app.set_region_mode(crate::settings::RegionMode::Auto);
+                    }
+                });
+                ui.add_space(8.0);
+                ui.label(RichText::new("Or pick a language").size(12.5).color(pal.muted));
+                let current = app.settings.region_language.clone();
+                ui.horizontal_wrapped(|ui| {
+                    for (id, label) in crate::region::LANGUAGES {
+                        let active = mode == crate::settings::RegionMode::Manual && current.as_deref() == Some(id);
+                        if crate::ui::widgets::pill_button(ui, label, active, accent, &pal) {
+                            app.choose_region_language(id);
+                        }
+                    }
+                });
+                if mode == crate::settings::RegionMode::Auto {
+                    if let (Some(language), label) = (current, app.settings.region_label.clone()) {
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(format!(
+                                "Detected {} - showing {} songs",
+                                label.unwrap_or_else(|| "your region".to_string()),
+                                crate::region::language_label(&language)
+                            ))
+                            .size(12.5)
+                            .color(pal.muted),
+                        );
+                    }
+                }
+            });
+
+            ui.add_space(12.0);
+
             section(ui, &pal, "YouTube sign-in");
             card(ui, &pal, |ui| {
                 ui.label(RichText::new("Use my browser's YouTube login").size(16.0).color(pal.text));

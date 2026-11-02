@@ -12,6 +12,16 @@ pub enum ThemeVariant {
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[derive(Default)]
+pub enum RegionMode {
+    #[default]
+    Ask,
+    Off,
+    Auto,
+    Manual,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Default)]
 pub enum RepeatMode {
     #[default]
     Off,
@@ -45,6 +55,9 @@ pub struct Settings {
 
     pub jiosaavn_base: String,
     pub ytdlp_cookie_browser: Option<String>,
+    pub region_mode: RegionMode,
+    pub region_language: Option<String>,
+    pub region_label: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -88,6 +101,9 @@ impl Default for Settings {
             crossfade: 0.0,
             jiosaavn_base: String::new(),
             ytdlp_cookie_browser: None,
+            region_mode: RegionMode::Ask,
+            region_language: None,
+            region_label: None,
         }
     }
 }

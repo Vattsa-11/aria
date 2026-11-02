@@ -14,6 +14,8 @@ pub enum Job {
     },
     Resolve { gen: u64, track: Track },
     Warm { track: Track },
+    Region,
+    Trending { language: String },
     FixMatch { track: Track },
     Download {
         track: Track,
@@ -51,6 +53,14 @@ pub enum Event {
         query: String,
         provider: Option<crate::provider::ProviderName>,
         results: Vec<Track>,
+        error: Option<String>,
+    },
+    Region {
+        result: Result<crate::region::Geo, String>,
+    },
+    Trending {
+        language: String,
+        tracks: Vec<Track>,
         error: Option<String>,
     },
     Warmed {
@@ -267,6 +277,22 @@ fn handle(job: Job, event_tx: &Sender<Event>) {
                 provider,
                 results,
                 error,
+            });
+        }
+        Job::Region => {
+            let events = event_tx.clone();
+            let _ = thread::Builder::new().name("aria-region".into()).spawn(move || {
+                let _ = events.send(Event::Region { result: crate::region::fetch_geo() });
+            });
+        }
+        Job::Trending { language } => {
+            let events = event_tx.clone();
+            let _ = thread::Builder::new().name("aria-trending".into()).spawn(move || {
+                let (tracks, error) = match crate::provider_jiosaavn::trending(&language, 24) {
+                    Ok(results) => (results.into_iter().map(|result| result.into_track()).collect(), None),
+                    Err(err) => (Vec::new(), Some(err)),
+                };
+                let _ = events.send(Event::Trending { language, tracks, error });
             });
         }
         Job::Warm { track } => {
