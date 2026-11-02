@@ -33,29 +33,115 @@ fn release_asset() -> &'static str {
     }
 }
 
-pub fn discover() -> Option<PathBuf> {
-    if let Some(paths) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&paths) {
-            for name in ["yt-dlp.exe", "yt-dlp.cmd", "yt-dlp.bat", "yt-dlp"] {
+const NAMES: [&str; 4] = ["yt-dlp.exe", "yt-dlp.cmd", "yt-dlp.bat", "yt-dlp"];
+
+pub fn candidates(
+    path_var: Option<std::ffi::OsString>,
+    local: &std::path::Path,
+    exe_dir: Option<&std::path::Path>,
+) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    if let Some(paths) = path_var {
+        'dirs: for dir in std::env::split_paths(&paths) {
+            for name in NAMES {
                 let candidate = dir.join(name);
                 if candidate.is_file() {
-                    return Some(candidate);
+                    found.push(candidate);
+                    break 'dirs;
                 }
             }
         }
     }
-    let local = local_bin();
     if local.is_file() {
-        return Some(local);
+        found.push(local.to_path_buf());
     }
-    None
+    if let Some(dir) = exe_dir {
+        for name in ["yt-dlp.exe", "yt-dlp"] {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                found.push(candidate);
+                break;
+            }
+        }
+    }
+    let mut unique: Vec<PathBuf> = Vec::new();
+    for path in found {
+        if !unique.contains(&path) {
+            unique.push(path);
+        }
+    }
+    unique
+}
+
+fn version_key(version: &str) -> Vec<u64> {
+    version
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse().ok())
+        .collect()
+}
+
+pub fn pick_newest(found: Vec<(PathBuf, Option<String>)>) -> Option<PathBuf> {
+    let mut best: Option<(PathBuf, Option<Vec<u64>>)> = None;
+    for (path, version) in found {
+        let key = version.as_deref().map(version_key);
+        let better = match &best {
+            None => true,
+            Some((_, current)) => key > *current,
+        };
+        if better {
+            best = Some((path, key));
+        }
+    }
+    best.map(|(path, _)| path)
+}
+
+type DiscoverKey = Vec<(PathBuf, Option<std::time::SystemTime>)>;
+
+static DISCOVERED: std::sync::Mutex<Option<(DiscoverKey, Option<PathBuf>)>> =
+    std::sync::Mutex::new(None);
+
+fn version_of(binary: &std::path::Path) -> Option<String> {
+    let output = crate::proc::command(binary).arg("--version").output().ok()?;
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .map(|line| line.trim().to_string())
+}
+
+pub fn discover() -> Option<PathBuf> {
+    let exe_dir = std::env::current_exe().ok().and_then(|exe| exe.parent().map(PathBuf::from));
+    let found = candidates(std::env::var_os("PATH"), &local_bin(), exe_dir.as_deref());
+    if found.len() <= 1 {
+        return found.into_iter().next();
+    }
+    let key: DiscoverKey = found
+        .iter()
+        .map(|path| (path.clone(), std::fs::metadata(path).and_then(|meta| meta.modified()).ok()))
+        .collect();
+    if let Ok(cache) = DISCOVERED.lock() {
+        if let Some((cached_key, result)) = cache.as_ref() {
+            if *cached_key == key {
+                return result.clone();
+            }
+        }
+    }
+    let versions = found
+        .into_iter()
+        .map(|path| {
+            let version = version_of(&path);
+            (path, version)
+        })
+        .collect();
+    let result = pick_newest(versions);
+    if let Ok(mut cache) = DISCOVERED.lock() {
+        *cache = Some((key, result.clone()));
+    }
+    result
 }
 
 pub fn version() -> Option<String> {
-    let binary = discover()?;
-    let output = crate::proc::command(&binary).arg("--version").output().ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    text.lines().next().map(|line| line.trim().to_string())
+    version_of(&discover()?)
 }
 
 pub fn run(args: &[&str]) -> Result<String, String> {
@@ -389,4 +475,57 @@ pub fn download_latest() -> Result<PathBuf, String> {
         let _ = std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o755));
     }
     Ok(destination)
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("aria-ytdlp-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn finds_path_then_data_folder_then_exe_folder() {
+        let path_dir = scratch("path");
+        let data_dir = scratch("data");
+        let exe_dir = scratch("exe");
+        std::fs::write(path_dir.join("yt-dlp"), b"x").unwrap();
+        let local = data_dir.join("yt-dlp");
+        std::fs::write(&local, b"x").unwrap();
+        std::fs::write(exe_dir.join("yt-dlp"), b"x").unwrap();
+        let path_var = std::env::join_paths([&path_dir]).ok();
+        let order = candidates(path_var, &local, Some(&exe_dir));
+        assert_eq!(
+            order,
+            vec![path_dir.join("yt-dlp"), local.clone(), exe_dir.join("yt-dlp")]
+        );
+        let without_path = candidates(None, &local, Some(&exe_dir));
+        assert_eq!(without_path, vec![local.clone(), exe_dir.join("yt-dlp")]);
+        let only_exe = candidates(None, &data_dir.join("missing"), Some(&exe_dir));
+        assert_eq!(only_exe, vec![exe_dir.join("yt-dlp")]);
+        assert!(candidates(None, &data_dir.join("missing"), None).is_empty());
+        for dir in [path_dir, data_dir, exe_dir] {
+            std::fs::remove_dir_all(dir).ok();
+        }
+    }
+
+    #[test]
+    fn newest_version_wins_and_ties_keep_the_earlier_one() {
+        let old = (PathBuf::from("/usr/bin/yt-dlp"), Some("2024.04.09".to_string()));
+        let new = (PathBuf::from("/data/bin/yt-dlp"), Some("2025.10.22".to_string()));
+        assert_eq!(pick_newest(vec![old.clone(), new.clone()]), Some(new.0.clone()));
+        assert_eq!(pick_newest(vec![new.clone(), old.clone()]), Some(new.0.clone()));
+        let same = (PathBuf::from("/exe/yt-dlp"), Some("2025.10.22".to_string()));
+        assert_eq!(pick_newest(vec![new.clone(), same]), Some(new.0.clone()));
+        let unknown = (PathBuf::from("/odd/yt-dlp"), None);
+        assert_eq!(pick_newest(vec![unknown.clone(), old.clone()]), Some(old.0.clone()));
+        assert_eq!(pick_newest(vec![unknown.clone()]), Some(unknown.0));
+        assert_eq!(pick_newest(vec![]), None);
+        let nightly = (PathBuf::from("/n/yt-dlp"), Some("2025.10.22.232958".to_string()));
+        assert_eq!(pick_newest(vec![new.clone(), nightly.clone()]), Some(nightly.0));
+    }
 }
