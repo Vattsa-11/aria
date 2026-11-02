@@ -885,7 +885,10 @@ mod tests {
     #[test]
     fn features_round_trip_and_replace() {
         crate::settings::test_data_dir();
-        let id = 9_000_000_001u64;
+        let id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(1);
         assert!(load_features(id).is_none());
         save_features(id, crate::pace::Features { bpm: 101.5, energy: 0.42 }).expect("save");
         let loaded = load_features(id).expect("load");
