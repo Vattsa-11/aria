@@ -14,7 +14,7 @@ name = "aria"
 path = "src/main.rs"
 
 [dependencies]
-eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "persistence", "x11", "wayland"] }
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "persistence", "clipboard", "x11", "wayland"] }
 egui = "0.37"
 rodio = "0.23"
 serde = { version = "1", features = ["derive"] }
