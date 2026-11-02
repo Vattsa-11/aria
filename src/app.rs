@@ -99,6 +99,11 @@ pub struct App {
     pub delete_all: Option<(u8, usize, u64)>,
     warm: Option<Warmed>,
     pub trending: Vec<Track>,
+    features: std::collections::HashMap<u64, crate::pace::Features>,
+    features_checked: std::collections::HashSet<u64>,
+    pub pace: crate::pace::Profile,
+    pub mood: Option<crate::pace::Mood>,
+    radio_label: Option<String>,
     pub trending_loading: bool,
     pub trending_error: Option<String>,
     pub geo_loading: bool,
@@ -227,6 +232,11 @@ impl App {
             delete_all: None,
             warm: None,
             trending: Vec::new(),
+            features: std::collections::HashMap::new(),
+            features_checked: std::collections::HashSet::new(),
+            pace: crate::pace::Profile::empty(),
+            mood: None,
+            radio_label: None,
             trending_loading: false,
             trending_error: None,
             geo_loading: false,
@@ -419,6 +429,7 @@ impl App {
             return;
         }
         self.offline_skips = 0;
+        self.learn_from_previous(track.id);
         self.remember_previous(track.id);
         self.current = Some(track.clone());
         self.current_origin = Some(origin);
@@ -426,6 +437,7 @@ impl App {
         self.record_history(&track);
         let duration = track.duration;
         let offline = self.download_path(track.id);
+        let analyze = self.features_for(track.id).is_none();
         match (track.is_online(), offline) {
 
             (true, Some(path)) => {
@@ -437,6 +449,7 @@ impl App {
                     duration,
                     fade,
                     warm: None,
+                    analyze,
                 })));
             }
             (false, _) => {
@@ -447,6 +460,7 @@ impl App {
                     duration,
                     fade,
                     warm: None,
+                    analyze,
                 })));
             }
             (true, None) => {
@@ -464,6 +478,7 @@ impl App {
                         duration,
                         fade,
                         warm: Some(warmed.http),
+                        analyze,
                     })));
                 } else {
                     let gen = self.play_gen;
@@ -523,7 +538,8 @@ impl App {
                 self.player.send(Command::Stop);
                 if self.settings.autoplay && !self.is_offline() {
                     if let Some(seed) = self.radio_seed() {
-                        let _ = self.jobs.tx.send(Job::Radio { seed });
+                        let video = self.current.as_ref().and_then(|track| track.yt_id());
+                        let _ = self.jobs.tx.send(Job::Radio { seed, video });
                         self.radio_pending = true;
                         self.notify("Queue finished - starting a radio mix");
                         self.persist(true);
@@ -1282,6 +1298,9 @@ impl App {
             self.notify("Removed from Liked Songs");
         } else {
             self.liked.insert(0, track.clone());
+            if let Some(features) = self.features_for(track.id) {
+                self.pace.learn(features, crate::pace::Reaction::Liked);
+            }
             self.notify("Added to Liked Songs");
         }
         self.persist_liked();
@@ -1494,6 +1513,79 @@ impl App {
         for track in tracks {
             let _ = self.thumb(track);
         }
+    }
+
+    pub fn features_for(&mut self, id: u64) -> Option<crate::pace::Features> {
+        if let Some(features) = self.features.get(&id) {
+            return Some(*features);
+        }
+        if self.features_checked.insert(id) {
+            if let Some(features) = crate::db::load_features(id) {
+                self.features.insert(id, features);
+                return Some(features);
+            }
+        }
+        None
+    }
+
+    fn learn_from_previous(&mut self, next_id: u64) {
+        let Some(previous) = self.current.clone() else {
+            return;
+        };
+        if previous.id == next_id {
+            return;
+        }
+        let snapshot = self.player.snapshot();
+        if snapshot.track_id != Some(previous.id) {
+            return;
+        }
+        let duration = snapshot.duration.or(previous.duration).map(|d| d.as_secs_f64());
+        let reaction = crate::pace::reaction_for(snapshot.position.as_secs_f64(), duration);
+        if let (Some(reaction), Some(features)) = (reaction, self.features_for(previous.id)) {
+            self.pace.learn(features, reaction);
+        }
+    }
+
+    pub fn rank_for_pace(&mut self, tracks: Vec<Track>) -> Vec<Track> {
+        for track in &tracks {
+            let _ = self.features_for(track.id);
+        }
+        let target = self.pace.target(self.mood);
+        let mut recent: Vec<String> = self
+            .history
+            .iter()
+            .take(5)
+            .chain(self.current.iter())
+            .map(|track| track.artist.split([',', '&']).next().unwrap_or("").trim().to_lowercase())
+            .filter(|artist| !artist.is_empty())
+            .collect();
+        recent.dedup();
+        let known = |id: u64| self.features.get(&id).copied();
+        crate::pace::rank(tracks, target, &known, &recent)
+    }
+
+    pub fn set_mood(&mut self, mood: Option<crate::pace::Mood>) {
+        self.mood = mood;
+    }
+
+    pub fn start_mood_mix(&mut self, mood: crate::pace::Mood) {
+        if self.is_offline() {
+            self.notify("Mood mixes need an internet connection");
+            return;
+        }
+        self.mood = Some(mood);
+        let language = self
+            .settings
+            .region_language
+            .as_deref()
+            .filter(|_| self.settings.region_mode != RegionMode::Off)
+            .map(crate::region::language_label)
+            .unwrap_or("");
+        let seed = format!("{} {}", mood.query(), language).trim().to_string();
+        self.radio_label = Some(format!("{} mix", mood.label()));
+        self.radio_pending = true;
+        let _ = self.jobs.tx.send(Job::Radio { seed, video: None });
+        self.notify(format!("Building a {} mix", mood.label().to_lowercase()));
     }
 
     pub fn refresh_trending(&mut self) {
@@ -1771,6 +1863,11 @@ impl App {
                         }
                     }
                 }
+                Event::Features { track_id, features } => {
+                    self.features_checked.insert(track_id);
+                    self.features.insert(track_id, features);
+                    let _ = crate::db::save_features(track_id, features);
+                }
                 Event::Region { result } => {
                     self.geo_loading = false;
                     match result {
@@ -1823,6 +1920,7 @@ impl App {
                                 bitrate_kbps: stream.bitrate_kbps,
                             });
                             let duration = stream.duration.or(track.duration);
+                            let analyze = self.features_for(track.id).is_none();
                             self.player.send(Command::Play(Box::new(PlayRequest {
                                 track,
                                 resolved: Some(stream),
@@ -1830,6 +1928,7 @@ impl App {
                                 duration,
                                 fade: self.pending_fade,
                                 warm: None,
+                                analyze,
                             })));
                         }
                         Err(message) => {
@@ -1946,7 +2045,9 @@ impl App {
                             crate::logs::error(&format!("Radio for {seed} failed: {message}"));
                         }
                     } else {
-                        self.queue.set_context(tracks.clone(), format!("{seed} radio"));
+                        let tracks = self.rank_for_pace(tracks);
+                        let name = self.radio_label.take().unwrap_or_else(|| format!("{seed} radio"));
+                        self.queue.set_context(tracks.clone(), name);
                         self.queue.mark_context_playing(0);
                         if let Some(track) = tracks.first().cloned() {
                             self.start_track(track, TrackOrigin::Context, Duration::ZERO);

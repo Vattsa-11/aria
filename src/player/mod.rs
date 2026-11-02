@@ -27,6 +27,7 @@ pub struct PlayRequest {
     pub duration: Option<Duration>,
     pub fade: Duration,
     pub warm: Option<crate::http::HttpStream>,
+    pub analyze: bool,
 }
 
 pub enum Command {
@@ -187,6 +188,9 @@ fn run(
                                     EqSource::new(decoder, eq.clone()),
                                     normalize.clone(),
                                 ));
+                                if request.analyze {
+                                    spawn_analysis(&request.track, fork.as_ref().map(|handle| handle.fork()), events.clone());
+                                }
                                 sinks[active].play();
                                 loaded = true;
                                 streaming_only = streaming;
@@ -349,6 +353,61 @@ struct Loaded {
     fork: Option<crate::http::HttpStream>,
 }
 
+fn head_samples(
+    mut decoder: Decoder<Box<dyn AudioSource>>,
+    seconds: u32,
+) -> (Vec<f32>, u32) {
+    use rodio::Source;
+    let rate = decoder.sample_rate().get();
+    let channels = decoder.channels().get() as usize;
+    let factor = (rate / 11_025).max(1) as usize;
+    let wanted = rate as usize * channels * seconds as usize;
+    let mut out = Vec::with_capacity(wanted / (channels * factor) + 1);
+    let mut frame_sum = 0.0f32;
+    let mut in_frame = 0usize;
+    let mut frames = 0usize;
+    let mut block_sum = 0.0f32;
+    for (taken, sample) in decoder.by_ref().take(wanted).enumerate() {
+        let _ = taken;
+        frame_sum += sample;
+        in_frame += 1;
+        if in_frame == channels {
+            block_sum += frame_sum / channels as f32;
+            frame_sum = 0.0;
+            in_frame = 0;
+            frames += 1;
+            if frames == factor {
+                out.push(block_sum / factor as f32);
+                block_sum = 0.0;
+                frames = 0;
+            }
+        }
+    }
+    (out, rate / factor as u32)
+}
+
+fn spawn_analysis(track: &Track, fork: Option<crate::http::HttpStream>, events: Sender<Event>) {
+    let id = track.id;
+    let local = track.local_path().map(|path| path.to_path_buf());
+    let _ = thread::Builder::new().name("aria-analyze".into()).spawn(move || {
+        let source: Box<dyn AudioSource> = match (fork, local) {
+            (Some(handle), _) => Box::new(handle),
+            (None, Some(path)) => match File::open(path) {
+                Ok(file) => Box::new(BufReader::new(file)),
+                Err(_) => return,
+            },
+            _ => return,
+        };
+        let Ok(decoder) = build_streaming_decoder(source) else {
+            return;
+        };
+        let (samples, rate) = head_samples(decoder, 45);
+        if let Some(features) = crate::pace::analyze(&samples, rate) {
+            let _ = events.send(Event::Features { track_id: id, features });
+        }
+    });
+}
+
 fn build_streaming_decoder(
     source: Box<dyn AudioSource>,
 ) -> Result<Decoder<Box<dyn AudioSource>>, rodio::decoder::DecoderError> {
@@ -473,6 +532,18 @@ mod tests {
     }
 
     #[test]
+    fn head_analysis_reads_samples_from_a_real_file() {
+        let (path, _) = fragmented_fixture("head");
+        let source = Counting { file: File::open(&path).unwrap(), highest: Arc::new(Mutex::new(0)) };
+        let decoder = build_streaming_decoder(Box::new(source)).expect("decode");
+        let (samples, rate) = head_samples(decoder, 45);
+        assert!((10_000..12_000).contains(&rate), "rate {rate}");
+        assert!(samples.len() as f32 > rate as f32 * 20.0, "got {} samples", samples.len());
+        assert!(crate::pace::analyze(&samples, rate).is_some());
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
     fn streaming_decoder_starts_after_reading_only_the_beginning() {
         let (path, len) = fragmented_fixture("start");
         let highest = Arc::new(Mutex::new(0u64));
@@ -519,6 +590,7 @@ mod tests {
             duration: None,
             fade: Duration::ZERO,
             warm: None,
+            analyze: false,
         })
     }
 

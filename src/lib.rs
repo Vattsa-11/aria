@@ -16,6 +16,7 @@ mod media_controls;
 mod miniplayer;
 mod model;
 mod normalize;
+mod pace;
 mod player;
 mod proc;
 mod queue;

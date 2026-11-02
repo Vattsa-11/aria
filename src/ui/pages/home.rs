@@ -51,6 +51,7 @@ pub fn home(app: &mut App, ui: &mut egui::Ui) {
 
             shortcut_grid(app, ui, &pal, accent, &mut actions);
             trending_section(app, ui, &pal, accent, &mut actions);
+            mood_section(app, ui, &pal, accent);
 
             if !app.history.is_empty() {
                 section(ui, "Recently played", &pal);
@@ -204,6 +205,42 @@ fn quick_picks(app: &App) -> Vec<(Track, PickSource)> {
 
 fn greeting() -> &'static str {
     "Good to see you"
+}
+
+fn mood_section(app: &mut App, ui: &mut egui::Ui, pal: &Palette, accent: Color32) {
+    section(ui, "How are you feeling?", pal);
+    ui.horizontal_wrapped(|ui| {
+        for mood in crate::pace::Mood::ALL {
+            let active = app.mood == Some(mood);
+            if crate::ui::widgets::pill_button(ui, mood.label(), active, accent, pal) {
+                if active {
+                    app.set_mood(None);
+                } else {
+                    app.start_mood_mix(mood);
+                }
+            }
+        }
+        if app.mood.is_some() && crate::ui::widgets::pill_button(ui, "Clear mood", false, accent, pal) {
+            app.set_mood(None);
+        }
+    });
+    ui.add_space(4.0);
+    let line = match (app.mood, app.pace.is_empty()) {
+        (Some(mood), true) => format!("Aiming for {} songs. Aria adapts as you listen.", mood.label().to_lowercase()),
+        (Some(mood), false) => format!(
+            "Aiming for {} songs, blended with your session pace (about {} BPM).",
+            mood.label().to_lowercase(),
+            app.pace.bpm.round() as i32
+        ),
+        (None, false) => format!(
+            "Keeping your session pace: about {} BPM, energy {}%.",
+            app.pace.bpm.round() as i32,
+            (app.pace.energy * 100.0).round() as i32
+        ),
+        (None, true) => "Pick a mood for a matching mix, or just listen: Aria learns your pace.".to_string(),
+    };
+    ui.label(RichText::new(line).size(12.5).color(pal.muted));
+    ui.add_space(10.0);
 }
 
 fn trending_section(

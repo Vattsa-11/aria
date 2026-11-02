@@ -49,6 +49,11 @@ CREATE TABLE IF NOT EXISTS lyrics (
     track_id INTEGER PRIMARY KEY,
     body     TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS features (
+    track_id INTEGER PRIMARY KEY,
+    bpm      REAL NOT NULL,
+    energy   REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS plays (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     track_id   INTEGER NOT NULL,
@@ -216,6 +221,33 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
+}
+
+pub fn load_features(track_id: u64) -> Option<crate::pace::Features> {
+    let conn = open().ok()?;
+    conn.query_row(
+        "SELECT bpm, energy FROM features WHERE track_id = ?1",
+        params![track_id as i64],
+        |row| {
+            Ok(crate::pace::Features {
+                bpm: row.get::<_, f64>(0)? as f32,
+                energy: row.get::<_, f64>(1)? as f32,
+            })
+        },
+    )
+    .optional()
+    .ok()
+    .flatten()
+}
+
+pub fn save_features(track_id: u64, features: crate::pace::Features) -> Result<(), String> {
+    let conn = open()?;
+    conn.execute(
+        "INSERT OR REPLACE INTO features (track_id, bpm, energy) VALUES (?1, ?2, ?3)",
+        params![track_id as i64, features.bpm as f64, features.energy as f64],
+    )
+    .map(|_| ())
+    .map_err(|err| err.to_string())
 }
 
 pub fn load_lyrics(track_id: u64) -> Option<String> {
@@ -848,5 +880,17 @@ mod tests {
             !loaded.iter().any(|saved| saved.id == track.id),
             "deleted track should be gone"
         );
+    }
+
+    #[test]
+    fn features_round_trip_and_replace() {
+        crate::settings::test_data_dir();
+        let id = 9_000_000_001u64;
+        assert!(load_features(id).is_none());
+        save_features(id, crate::pace::Features { bpm: 101.5, energy: 0.42 }).expect("save");
+        let loaded = load_features(id).expect("load");
+        assert!((loaded.bpm - 101.5).abs() < 0.01 && (loaded.energy - 0.42).abs() < 0.01);
+        save_features(id, crate::pace::Features { bpm: 70.0, energy: 0.1 }).expect("replace");
+        assert!((load_features(id).unwrap().bpm - 70.0).abs() < 0.01);
     }
 }

@@ -26,7 +26,7 @@ pub enum Job {
     EnsureYtDlp,
     DownloadYtDlp,
     Lyrics { track: Track },
-    Radio { seed: String },
+    Radio { seed: String, video: Option<String> },
     ImportMatch {
         token: u64,
         index: usize,
@@ -62,6 +62,10 @@ pub enum Event {
         language: String,
         tracks: Vec<Track>,
         error: Option<String>,
+    },
+    Features {
+        track_id: u64,
+        features: crate::pace::Features,
     },
     Warmed {
         track_id: u64,
@@ -407,9 +411,14 @@ fn handle(job: Job, event_tx: &Sender<Event>) {
             };
             let _ = event_tx.send(Event::Lyrics { track_id, result });
         }
-        Job::Radio { seed } => {
+        Job::Radio { seed, video } => {
             let query = format!("{seed} radio mix");
-            let (tracks, error) = match provider_search(&query, 20, None) {
+            let from_radio = video.as_deref().and_then(|id| {
+                crate::radio::fetch(id, 40)
+                    .map_err(|err| crate::logs::error(&format!("radio candidates failed, searching instead: {err}")))
+                    .ok()
+            });
+            let (tracks, error) = match from_radio.map(Ok).unwrap_or_else(|| provider_search(&query, 20, None)) {
                 Ok(results) => (results, None),
                 Err(err) => (Vec::new(), Some(err)),
             };
