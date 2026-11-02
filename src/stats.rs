@@ -40,7 +40,31 @@ pub fn rss_bytes() -> Option<u64> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn rss_bytes() -> Option<u64> {
+    #[repr(C)]
+    #[derive(Default)]
+    struct TaskBasicInfo {
+        virtual_size: u64,
+        resident_size: u64,
+        resident_size_max: u64,
+        user_time: [i32; 2],
+        system_time: [i32; 2],
+        policy: i32,
+        suspend_count: i32,
+    }
+    extern "C" {
+        static mach_task_self_: u32;
+        fn task_info(task: u32, flavor: u32, info: *mut TaskBasicInfo, count: *mut u32) -> i32;
+    }
+    const MACH_TASK_BASIC_INFO: u32 = 20;
+    let mut info = TaskBasicInfo::default();
+    let mut count = (std::mem::size_of::<TaskBasicInfo>() / 4) as u32;
+    let status = unsafe { task_info(mach_task_self_, MACH_TASK_BASIC_INFO, &mut info, &mut count) };
+    (status == 0).then_some(info.resident_size)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn rss_bytes() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     for line in status.lines() {
