@@ -42,11 +42,14 @@ pub fn downloads(app: &mut App, ui: &mut egui::Ui) {
         let active = app.downloading.clone();
         for track in &active {
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(&track.title)
-                        .size(13.0)
-                        .color(pal.muted),
-                );
+                let progress = app.download_progress.get(&track.id).copied();
+                let label = match progress {
+                    Some((done, Some(total))) if total > 0 => {
+                        format!("{} · {}%", track.title, done * 100 / total)
+                    }
+                    _ => track.title.clone(),
+                };
+                ui.label(egui::RichText::new(label).size(13.0).color(pal.muted));
                 if pill_button(ui, "Cancel", false, accent, &pal) {
                     cancel = Some(track.id);
                 }

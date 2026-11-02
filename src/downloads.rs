@@ -14,12 +14,25 @@ pub fn ensure_dir() -> Result<PathBuf, String> {
 }
 
 pub fn existing(track_id: u64) -> Option<PathBuf> {
-    let prefix = format!("{track_id}.");
-    let entries = std::fs::read_dir(dir()).ok()?;
+    existing_in(&dir(), track_id)
+}
+
+pub fn playback_track(track: &crate::model::Track, local: Option<PathBuf>) -> crate::model::Track {
+    let mut playable = track.clone();
+    if let Some(path) = local {
+        playable.source = crate::model::TrackSource::Local(path);
+    }
+    playable
+}
+
+fn existing_in(folder: &Path, track_id: u64) -> Option<PathBuf> {
+    let dotted = format!("{track_id}.");
+    let named = format!("{track_id} - ");
+    let entries = std::fs::read_dir(folder).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();
         let name = path.file_name()?.to_string_lossy().to_string();
-        if !name.starts_with(&prefix) {
+        if !name.starts_with(&dotted) && !name.starts_with(&named) {
             continue;
         }
         if name.ends_with(".part") || name.ends_with(".ytdl") {
@@ -139,6 +152,33 @@ mod tests {
         assert!(!dir.join("77.m4a.part").exists());
         assert!(!dir.join("77.m4a.ytdl").exists());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn finds_both_id_and_named_files_but_not_partials() {
+        crate::settings::test_data_dir();
+        let dir = ensure_dir().expect("downloads dir").join("existing-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        std::fs::write(dir.join("9 - Artist - Song.m4a.part"), b"x").unwrap();
+        std::fs::write(dir.join("9 - Artist - Song.part"), b"x").unwrap();
+        assert!(existing_in(&dir, 9).is_none());
+        std::fs::write(dir.join("9 - Artist - Song.m4a"), b"x").unwrap();
+        assert!(existing_in(&dir, 9).unwrap().ends_with("9 - Artist - Song.m4a"));
+        std::fs::write(dir.join("8.webm"), b"x").unwrap();
+        assert!(existing_in(&dir, 8).unwrap().ends_with("8.webm"));
+        assert!(existing_in(&dir, 90).is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn local_file_replaces_the_online_source_for_playback() {
+        let online = Track::yt("abc", "Song", "Artist", None);
+        let local = playback_track(&online, Some(PathBuf::from("/d/1.m4a")));
+        assert_eq!(local.local_path(), Some(Path::new("/d/1.m4a")));
+        assert_eq!(local.id, online.id);
+        let streamed = playback_track(&online, None);
+        assert!(streamed.is_online());
     }
 
     #[test]

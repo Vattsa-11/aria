@@ -35,6 +35,10 @@ pub struct HttpStream {
 }
 
 impl HttpStream {
+    pub fn len(&self) -> Option<u64> {
+        self.len
+    }
+
     pub fn open(
         agent: Agent,
         url: String,

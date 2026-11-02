@@ -12,7 +12,25 @@ pub use crate::provider::ResolvedStream;
 use crate::settings::data_dir;
 
 pub fn local_bin() -> PathBuf {
-    data_dir().join("bin").join("yt-dlp.exe")
+    data_dir().join("bin").join(binary_name())
+}
+
+fn binary_name() -> &'static str {
+    if cfg!(windows) {
+        "yt-dlp.exe"
+    } else {
+        "yt-dlp"
+    }
+}
+
+fn release_asset() -> &'static str {
+    if cfg!(windows) {
+        "yt-dlp.exe"
+    } else if cfg!(target_os = "macos") {
+        "yt-dlp_macos"
+    } else {
+        "yt-dlp_linux"
+    }
 }
 
 pub fn discover() -> Option<PathBuf> {
@@ -348,7 +366,7 @@ pub fn download_latest() -> Result<PathBuf, String> {
     }
     let agent = crate::http::fetch_agent();
     let mut response = agent
-        .get("https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe")
+        .get(format!("https://github.com/yt-dlp/yt-dlp/releases/latest/download/{}", release_asset()))
         .call()
         .map_err(|err| err.to_string())?;
     use std::io::Read as _;
@@ -365,5 +383,10 @@ pub fn download_latest() -> Result<PathBuf, String> {
     let temp = destination.with_extension("exe.tmp");
     std::fs::write(&temp, &bytes).map_err(|err| err.to_string())?;
     std::fs::rename(&temp, &destination).map_err(|err| err.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o755));
+    }
     Ok(destination)
 }

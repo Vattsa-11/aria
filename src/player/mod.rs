@@ -148,7 +148,7 @@ fn run(
                     }
                     let target = if crossfading { 1 - active } else { active };
                     match load_source(&request) {
-                        Ok((source, duration_hint)) => match Decoder::new(source) {
+                        Ok((source, duration_hint, byte_len)) => match build_decoder(source, byte_len) {
                             Ok(decoder) => {
                                 let decoder_duration = decoder.total_duration();
                                 if crossfading {
@@ -272,16 +272,31 @@ fn run(
     }
 }
 
+fn build_decoder(
+    source: Box<dyn AudioSource>,
+    byte_len: Option<u64>,
+) -> Result<Decoder<Box<dyn AudioSource>>, rodio::decoder::DecoderError> {
+    let mut builder = Decoder::builder().with_data(source).with_seekable(true);
+    if let Some(len) = byte_len {
+        builder = builder.with_byte_len(len);
+    }
+    builder.build()
+}
+
+type Loaded = (Box<dyn AudioSource>, Option<Duration>, Option<u64>);
+
 fn load_source(
     request: &PlayRequest,
-) -> Result<(Box<dyn AudioSource>, Option<Duration>), String> {
+) -> Result<Loaded, String> {
     match &request.track.source {
         TrackSource::Local(path) => {
             let file = File::open(path)
                 .map_err(|err| format!("Cannot open {}: {err}", path.display()))?;
+            let len = file.metadata().ok().map(|meta| meta.len());
             Ok((
                 Box::new(BufReader::new(file)),
                 request.track.duration,
+                len,
             ))
         }
         TrackSource::Yt { .. } | TrackSource::Jiosaavn { .. } => {
@@ -295,7 +310,24 @@ fn load_source(
                 resolved.headers.clone(),
             )?;
             let duration = resolved.duration.or(request.duration);
-            Ok((Box::new(stream), duration))
+            let len = stream.len();
+            Ok((Box::new(stream), duration, len))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_downloaded_aac_in_mp4() {
+        let path = std::env::temp_dir().join(format!("aria-tone-{}.m4a", std::process::id()));
+        std::fs::write(&path, include_bytes!("fixtures/tone.m4a")).expect("write fixture");
+        let file = File::open(&path).expect("open");
+        let len = file.metadata().ok().map(|meta| meta.len());
+        let decoder = build_decoder(Box::new(BufReader::new(file)), len).expect("decode m4a");
+        assert!(decoder.count() > 5_000);
+        std::fs::remove_file(&path).ok();
     }
 }

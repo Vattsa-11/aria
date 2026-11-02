@@ -70,6 +70,11 @@ pub enum Event {
         track: Track,
         result: Result<std::path::PathBuf, String>,
     },
+    DownloadProgress {
+        track_id: u64,
+        done: u64,
+        total: Option<u64>,
+    },
     YtDlp {
         message: String,
         ready: bool,
@@ -103,6 +108,33 @@ pub struct Jobs {
     pub thumb_tx: Sender<ThumbJob>,
     pub event_tx: Sender<Event>,
     pub rx: Receiver<Event>,
+}
+
+fn run_download(
+    track: &Track,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    events: &Sender<Event>,
+) -> Result<std::path::PathBuf, String> {
+    let dir = crate::downloads::ensure_dir()?;
+    let stem = crate::httpdl::file_stem(track);
+    match crate::httpdl::path_for(track) {
+        crate::httpdl::DownloadPath::YtDlp => {
+            let url = track.watch_url().ok_or("This track has no download address")?;
+            crate::ytdlp::download_audio(&url, &dir, &stem, cancel)
+        }
+        crate::httpdl::DownloadPath::Http => {
+            let stream = crate::provider::resolve_chain(track)?;
+            let track_id = track.id;
+            let last = std::cell::Cell::new(0u64);
+            crate::httpdl::fetch(&stream.url, &stream.headers, &dir, &stem, cancel, &|done, total| {
+                if done == total.unwrap_or(0) || done >= last.get() + 128 * 1024 {
+                    last.set(done);
+                    let _ = events.send(Event::DownloadProgress { track_id, done, total });
+                }
+            })
+        }
+        crate::httpdl::DownloadPath::Unsupported => Err("Only online tracks can be downloaded".to_string()),
+    }
 }
 
 pub fn spawn() -> Jobs {
@@ -264,19 +296,13 @@ fn handle(job: Job, event_tx: &Sender<Event>) {
             });
         }
         Job::Download { track, cancel } => {
-            let result = match track.watch_url() {
-                Some(url) => match crate::downloads::ensure_dir() {
-                    Ok(dir) => crate::ytdlp::download_audio(
-                        &url,
-                        &dir,
-                        &track.id.to_string(),
-                        cancel,
-                    ),
-                    Err(err) => Err(err),
-                },
-                None => Err("Only online tracks can be downloaded".to_string()),
-            };
-            let _ = event_tx.send(Event::Download { track, result });
+            let events = event_tx.clone();
+            let _ = thread::Builder::new()
+                .name("aria-download".into())
+                .spawn(move || {
+                    let result = run_download(&track, cancel, &events);
+                    let _ = events.send(Event::Download { track, result });
+                });
         }
         Job::ImportMatch {
             token,

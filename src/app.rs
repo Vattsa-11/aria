@@ -97,6 +97,7 @@ pub struct App {
     download_cancels: Vec<(u64, Arc<std::sync::atomic::AtomicBool>)>,
 
     pub delete_all: Option<(u8, usize, u64)>,
+    pub download_progress: std::collections::HashMap<u64, (u64, Option<u64>)>,
 
     pub online: bool,
     probe_busy: bool,
@@ -217,6 +218,7 @@ impl App {
             downloading: Vec::new(),
             download_cancels: Vec::new(),
             delete_all: None,
+            download_progress: std::collections::HashMap::new(),
             online: true,
             probe_busy: false,
             last_probe: Instant::now(),
@@ -413,8 +415,7 @@ impl App {
         match (track.is_online(), offline) {
 
             (true, Some(path)) => {
-                let mut local = track.clone();
-                local.source = TrackSource::Local(path);
+                let local = crate::downloads::playback_track(&track, Some(path));
                 self.player.send(Command::Play(Box::new(PlayRequest {
                     track: local,
                     resolved: None,
@@ -1128,6 +1129,7 @@ impl App {
         }
         self.download_cancels.retain(|(id, _)| *id != track_id);
         self.downloading.retain(|track| track.id != track_id);
+        self.download_progress.remove(&track_id);
         self.notify("Download cancelled");
     }
 
@@ -1641,7 +1643,11 @@ impl App {
                         }
                     }
                 }
+                Event::DownloadProgress { track_id, done, total } => {
+                    self.download_progress.insert(track_id, (done, total));
+                }
                 Event::Download { track, result } => {
+                    self.download_progress.remove(&track.id);
                     self.downloading.retain(|item| item.id != track.id);
                     self.download_cancels.retain(|(id, _)| *id != track.id);
                     match result {

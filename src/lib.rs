@@ -6,6 +6,7 @@ mod downloads;
 mod net;
 mod equalizer;
 mod http;
+mod httpdl;
 mod import;
 mod jobs;
 mod logs;
