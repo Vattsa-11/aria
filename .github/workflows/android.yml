@@ -14,6 +14,24 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-apk
         run: cargo install cargo-apk --locked
+      - name: Prepare signing key
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          store="$RUNNER_TEMP/aria.keystore"
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$store"
+            password="$KEYSTORE_PASSWORD"
+          else
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret: signing with a temporary key. Updates will not install over earlier builds."
+            password="aria-temporary-key"
+            keytool -genkeypair -keystore "$store" -alias aria -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$password" -keypass "$password" -dname "CN=Aria,O=Aria,C=IN"
+          fi
+          echo "CARGO_APK_RELEASE_KEYSTORE=$store" >> "$GITHUB_ENV"
+          echo "CARGO_APK_RELEASE_KEYSTORE_PASSWORD=$password" >> "$GITHUB_ENV"
       - name: Build APK
         run: |
           export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"

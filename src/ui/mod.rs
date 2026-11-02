@@ -1,5 +1,6 @@
 pub mod icons;
 pub mod pages;
+pub mod phone;
 pub mod theme;
 pub mod widgets;
 
@@ -27,24 +28,36 @@ pub fn root(app: &mut App, ui: &mut Ui) {
     let pal = theme::palette(app.settings.theme);
     let window_width = ui.max_rect().width();
     let compact = window_width < 900.0;
+    let phone = phone::is_phone(window_width);
 
     app.tick();
     shortcuts(app, &ctx);
     drop_files(app, &ctx);
 
-    if compact {
-        bottom_nav(app, ui, accent, &pal);
+    if phone && app.now_playing_open {
+        widgets::set_loading(app.audio_state() == crate::player::AudioState::Loading);
+        phone::now_playing(app, ui, accent, &pal);
+        return;
     }
-    player_bar(app, ui, compact, accent, &pal);
-    lyrics_panel(app, ui, accent, &pal);
-    queue_panel(app, ui, accent, &pal);
+    if phone {
+        phone::tab_bar(app, ui, accent, &pal);
+        phone::mini_player(app, ui, accent, &pal);
+    } else {
+        if compact {
+            bottom_nav(app, ui, accent, &pal);
+        }
+        player_bar(app, ui, compact, accent, &pal);
+    }
+    let panel_width = if phone { window_width } else { 360.0 };
+    lyrics_panel(app, ui, accent, &pal, panel_width);
+    queue_panel(app, ui, accent, &pal, panel_width);
 
-    if !compact {
+    if !compact && !phone {
         side_nav(app, ui, accent, &pal);
     }
 
     widgets::set_loading(app.audio_state() == crate::player::AudioState::Loading);
-    central(app, ui);
+    central(app, ui, phone);
 
     if app.toast.is_some() {
         toast(&ctx, app, accent, &pal);
@@ -962,13 +975,15 @@ fn bottom_nav(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
         });
 }
 
-fn central(app: &mut App, ui: &mut Ui) {
+fn central(app: &mut App, ui: &mut Ui, phone: bool) {
     let pal = theme::palette(app.settings.theme);
+    let side_margin = if phone { 14 } else { 24 };
+    let top_margin = if phone { 8 + phone::top_inset(ui) as i8 } else { 8 };
     egui::CentralPanel::default()
         .frame(Frame::new().fill(pal.bg).inner_margin(Margin {
-            left: 24,
-            right: 24,
-            top: 8,
+            left: side_margin,
+            right: side_margin,
+            top: top_margin,
             bottom: 8,
         }))
         .show(ui, |ui| {
@@ -991,6 +1006,10 @@ fn central(app: &mut App, ui: &mut Ui) {
                 Page::Downloads => pages::downloads(app, ui),
                 Page::Import => pages::import(app, ui),
                 Page::Settings => pages::settings(app, ui),
+                Page::More => {
+                    let accent = theme::accent(&app.settings);
+                    phone::more_page(app, ui, accent, &pal)
+                }
             }
         });
 }
@@ -1016,7 +1035,7 @@ fn offline_chip(app: &App, ui: &mut Ui, pal: &Palette) {
 }
 
 
-fn lyrics_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
+fn lyrics_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width: f32) {
     if !app.lyrics_open {
         return;
     }
@@ -1026,7 +1045,7 @@ fn lyrics_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
     let mut seek_to: Option<f64> = None;
 
     egui::Panel::right("lyrics_panel")
-        .exact_size(360.0)
+        .exact_size(width)
         .resizable(false)
         .frame(Frame::new().fill(pal.surface).inner_margin(Margin {
             left: 16,
@@ -1108,7 +1127,7 @@ fn lyrics_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
     }
 }
 
-fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
+fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width: f32) {
     if !app.queue_open {
         return;
     }
@@ -1121,7 +1140,7 @@ fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
     };
 
     egui::Panel::right("queue_panel")
-        .exact_size(340.0)
+        .exact_size(width.min(if width < 700.0 { width } else { 340.0 }))
         .resizable(false)
         .frame(Frame::new().fill(pal.surface).inner_margin(Margin {
             left: 16,

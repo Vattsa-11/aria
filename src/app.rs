@@ -20,7 +20,7 @@ use crate::queue::TrackMenuAction;
 use crate::settings::{self, RegionMode, RepeatMode, Settings};
 use crate::ui::theme;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Page {
     Home,
     Library,
@@ -33,6 +33,7 @@ pub enum Page {
     Import,
     PlaylistDetail(usize),
     Settings,
+    More,
 }
 
 pub struct FixMatchState {
@@ -147,6 +148,7 @@ pub struct App {
     pub media_rx: Receiver<MediaAction>,
     pub media_ready: bool,
     pub focus_search: bool,
+    pub now_playing_open: bool,
     pub ytdlp_status: Option<(String, bool)>,
     pub fix_match: Option<FixMatchState>,
     pub new_playlist_dialog: bool,
@@ -278,6 +280,7 @@ impl App {
             media_rx,
             media_ready: false,
             focus_search: false,
+            now_playing_open: false,
             ytdlp_status: None,
             fix_match: None,
             new_playlist_dialog: false,

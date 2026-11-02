@@ -72,54 +72,38 @@ fn run_with(options: eframe::NativeOptions) -> eframe::Result {
     result
 }
 
+fn preview_size() -> Option<[f32; 2]> {
+    let value = std::env::var("ARIA_WINDOW").ok()?;
+    let (width, height) = value.split_once('x')?;
+    let (width, height) = (width.trim().parse::<f32>().ok()?, height.trim().parse::<f32>().ok()?);
+    ((200.0..=4000.0).contains(&width) && (200.0..=4000.0).contains(&height)).then_some([width, height])
+}
+
 fn native_options() -> eframe::NativeOptions {
+    let size = preview_size().unwrap_or([1180.0, 780.0]);
     eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_app_id("aria.player")
             .with_title("Aria")
             .with_icon(window_icon())
-            .with_inner_size([1180.0, 780.0])
-            .with_min_inner_size([420.0, 420.0]),
+            .with_inner_size(size)
+            .with_min_inner_size([320.0, 420.0]),
         renderer: eframe::Renderer::Glow,
-        persist_window: true,
+        persist_window: preview_size().is_none(),
         centered: true,
         ..Default::default()
     }
 }
 
 fn window_icon() -> std::sync::Arc<egui::IconData> {
-    const SIZE: u32 = 64;
-    let accent = [16u8, 185, 165];
-    let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
-    let center = (SIZE as f32 - 1.0) * 0.5;
-    let radius = SIZE as f32 * 0.5 - 2.0;
-
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let dx = x as f32 - center;
-            let dy = y as f32 - center;
-            let distance = (dx * dx + dy * dy).sqrt();
-            if distance > radius + 1.0 {
-                continue;
-            }
-            let coverage = (radius - distance).clamp(0.0, 1.0);
-            let play = dx > -9.0 && dx < 12.0 && dy.abs() < (12.0 - (dx + 9.0) * 0.42).max(0.0);
-            let (r, g, b) = if play {
-                (246, 248, 250)
-            } else {
-                (accent[0], accent[1], accent[2])
-            };
-            let index = ((y * SIZE + x) * 4) as usize;
-            rgba[index] = r;
-            rgba[index + 1] = g;
-            rgba[index + 2] = b;
-            rgba[index + 3] = (coverage * 255.0).round() as u8;
-        }
+    let decoded = image::load_from_memory(include_bytes!("../assets/icon-256.png"))
+        .map(|image| image.to_rgba8());
+    match decoded {
+        Ok(rgba) => std::sync::Arc::new(egui::IconData {
+            width: rgba.width(),
+            height: rgba.height(),
+            rgba: rgba.into_raw(),
+        }),
+        Err(_) => std::sync::Arc::new(egui::IconData::default()),
     }
-
-    std::sync::Arc::new(egui::IconData {
-        rgba,
-        width: SIZE,
-        height: SIZE,
-    })
 }

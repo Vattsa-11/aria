@@ -1,5 +1,7 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package Name="Aria" Manufacturer="magi8101" Version="$(Version)" UpgradeCode="6f1d2c3a-8b7e-5a41-9c0d-3e2f4a5b6c7d" Scope="perMachine" Compressed="yes">
+    <Icon Id="AriaIcon.ico" SourceFile="$(IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="AriaIcon.ico" />
     <MajorUpgrade DowngradeErrorMessage="A newer version of Aria is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
@@ -11,7 +13,7 @@
     <ComponentGroup Id="AriaFiles" Directory="INSTALLFOLDER">
       <Component Id="AriaExe" Guid="*">
         <File Id="AriaExeFile" Source="$(ExePath)" Name="aria.exe" KeyPath="yes" />
-        <Shortcut Id="AriaStartMenu" Directory="ProgramMenuFolder" Name="Aria" Description="Touch-first music player" WorkingDirectory="INSTALLFOLDER" Advertise="no" />
+        <Shortcut Id="AriaStartMenu" Directory="ProgramMenuFolder" Name="Aria" Description="Touch-first music player" WorkingDirectory="INSTALLFOLDER" Icon="AriaIcon.ico" Advertise="no" />
       </Component>
       <Component Id="YtdlpExe" Guid="*">
         <File Id="YtdlpExeFile" Source="$(YtdlpPath)" Name="yt-dlp.exe" KeyPath="yes" />

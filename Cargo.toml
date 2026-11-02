@@ -13,6 +13,9 @@ crate-type = ["cdylib", "rlib"]
 name = "aria"
 path = "src/main.rs"
 
+[build-dependencies]
+embed-resource = "3"
+
 [dependencies]
 eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "persistence", "clipboard", "x11", "wayland"] }
 egui = "0.37"
@@ -43,6 +46,7 @@ android-activity = { version = "0.6", features = ["native-activity"] }
 [package.metadata.android]
 package = "com.magi8101.aria"
 build_targets = ["aarch64-linux-android"]
+resources = "android/res"
 
 [package.metadata.android.sdk]
 min_sdk_version = 26
@@ -50,6 +54,7 @@ target_sdk_version = 34
 
 [package.metadata.android.application]
 label = "Aria"
+icon = "@mipmap/ic_launcher"
 
 [[package.metadata.android.uses_permission]]
 name = "android.permission.INTERNET"
@@ -69,4 +74,5 @@ extended-description = "Touch-first music player for local files and streaming f
 assets = [
     ["target/release/aria", "usr/bin/", "755"],
     ["packaging/aria.desktop", "usr/share/applications/", "644"],
+    ["assets/icon-256.png", "usr/share/icons/hicolor/256x256/apps/aria.png", "644"],
 ]

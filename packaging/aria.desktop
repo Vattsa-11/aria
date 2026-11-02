@@ -3,5 +3,6 @@ Type=Application
 Name=Aria
 Comment=Touch-first music player
 Exec=aria
+Icon=aria
 Terminal=false
 Categories=AudioVideo;Audio;Player;
