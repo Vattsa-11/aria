@@ -63,7 +63,7 @@ jobs:
       - name: Test
         env:
           ARIA_DATA_DIR: ${{ runner.temp }}/aria-test-data
-        run: cargo test --release
+        run: cargo test
 
       - name: Build
         run: cargo build --release

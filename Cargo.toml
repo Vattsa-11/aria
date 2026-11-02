@@ -1,6 +1,6 @@
 [package]
 name = "aria"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "Lightweight touch-first Windows desktop music player"
 
@@ -75,4 +75,5 @@ assets = [
     ["target/release/aria", "usr/bin/", "755"],
     ["packaging/aria.desktop", "usr/share/applications/", "644"],
     ["assets/icon-256.png", "usr/share/icons/hicolor/256x256/apps/aria.png", "644"],
+    ["ytdlp-download", "usr/lib/aria/yt-dlp", "755"],
 ]

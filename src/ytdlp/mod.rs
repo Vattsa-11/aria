@@ -56,10 +56,18 @@ pub fn candidates(
         found.push(local.to_path_buf());
     }
     if let Some(dir) = exe_dir {
-        for name in ["yt-dlp.exe", "yt-dlp"] {
-            let candidate = dir.join(name);
-            if candidate.is_file() {
-                found.push(candidate);
+        let packaged = dir.parent().map(|parent| parent.join("lib").join("aria"));
+        for folder in std::iter::once(dir.to_path_buf()).chain(packaged) {
+            let mut hit = false;
+            for name in ["yt-dlp.exe", "yt-dlp"] {
+                let candidate = folder.join(name);
+                if candidate.is_file() {
+                    found.push(candidate);
+                    hit = true;
+                    break;
+                }
+            }
+            if hit {
                 break;
             }
         }
@@ -685,6 +693,16 @@ mod discovery_tests {
         assert_eq!(without_path, vec![local.clone(), exe_dir.join("yt-dlp")]);
         let only_exe = candidates(None, &data_dir.join("missing"), Some(&exe_dir));
         assert_eq!(only_exe, vec![exe_dir.join("yt-dlp")]);
+        let root = scratch("deb");
+        let bin = root.join("usr").join("bin");
+        let lib = root.join("usr").join("lib").join("aria");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("yt-dlp"), b"x").unwrap();
+        assert_eq!(candidates(None, &data_dir.join("missing"), Some(&bin)), vec![lib.join("yt-dlp")]);
+        std::fs::write(bin.join("yt-dlp"), b"x").unwrap();
+        assert_eq!(candidates(None, &data_dir.join("missing"), Some(&bin)), vec![bin.join("yt-dlp")]);
+        std::fs::remove_dir_all(&root).ok();
         assert!(candidates(None, &data_dir.join("missing"), None).is_empty());
         for dir in [path_dir, data_dir, exe_dir] {
             std::fs::remove_dir_all(dir).ok();
