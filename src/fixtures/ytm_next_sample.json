@@ -1,0 +1,155 @@
+{
+ "contents": {
+  "singleColumnMusicWatchNextResultsRenderer": {
+   "tabbedRenderer": {
+    "watchNextTabbedResultsRenderer": {
+     "tabs": [
+      {
+       "tabRenderer": {
+        "content": {
+         "musicQueueRenderer": {
+          "content": {
+           "playlistPanelRenderer": {
+            "contents": [
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "KvMY1uzSC1E",
+               "title": {
+                "runs": [
+                 {
+                  "text": "Cyberpunk: Edgerunners | “I Really Want to Stay At Your House” by Rosa Walton | Music Video"
+                 }
+                ]
+               },
+               "shortBylineText": {
+                "runs": [
+                 {
+                  "text": "Netflix"
+                 }
+                ]
+               },
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://i.ytimg.com/vi/KvMY1uzSC1E/hqdefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCggAEOADGC0guwJIWg&rs=AMzJL3kFeYzodBc5lAN1zGW6iUugNEPBKw",
+                  "width": 400,
+                  "height": 225
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "4:23"
+                 }
+                ]
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "-Y-lAsv-cJY",
+               "title": {
+                "runs": [
+                 {
+                  "text": "【MV】I Really Want to Stay At Your House - Rosa Walton & Hallie Coggins"
+                 }
+                ]
+               },
+               "shortBylineText": {
+                "runs": [
+                 {
+                  "text": "貓哥"
+                 }
+                ]
+               },
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://i.ytimg.com/vi/-Y-lAsv-cJY/hqdefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCggAEOADGC0guwJIWg&rs=AMzJL3m_Yu-agGgljb0n_o3iWSEnjob8kg",
+                  "width": 400,
+                  "height": 225
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "4:07"
+                 }
+                ]
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "r6zIGXun57U",
+               "title": {
+                "runs": [
+                 {
+                  "text": "Legends Never Die (ft. Against The Current) | Worlds 2017 - League of Legends"
+                 }
+                ]
+               },
+               "shortBylineText": {
+                "runs": [
+                 {
+                  "text": "League of Legends"
+                 }
+                ]
+               },
+               "thumbnail": {
+                "thumbnails": [
+                 {
+                  "url": "https://i.ytimg.com/vi/r6zIGXun57U/hqdefault.jpg?sqp=-oaymwEWCJADEOEBIAQqCggAEOADGC0guwJIWg&rs=AMzJL3nF8pHm_alHG0DYE-xhly6ifqBu8A",
+                  "width": 400,
+                  "height": 225
+                 }
+                ]
+               },
+               "lengthText": {
+                "runs": [
+                 {
+                  "text": "2:59"
+                 }
+                ]
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "",
+               "title": {
+                "runs": [
+                 {
+                  "text": "broken"
+                 }
+                ]
+               }
+              }
+             },
+             {
+              "playlistPanelVideoRenderer": {
+               "videoId": "NoTitle000"
+              }
+             }
+            ],
+            "continuations": [
+             {
+              "nextRadioContinuationData": {
+               "continuation": "TOKEN123"
+              }
+             }
+            ]
+           }
+          }
+         }
+        }
+       }
+      }
+     ]
+    }
+   }
+  }
+ }
+}

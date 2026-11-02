@@ -352,7 +352,16 @@ fn handle(job: Job, event_tx: &Sender<Event>) {
             });
         }
         Job::ImportPlaylist { token, url } => {
-            let (tracks, error) = match crate::ytdlp::playlist_tracks(&url) {
+            let radio = if crate::ytdlp::is_youtube_mix(&url) {
+                crate::radio::seed_from_url(&url).and_then(|seed| {
+                    crate::radio::fetch(&seed, crate::ytdlp::MIX_LIMIT)
+                        .map_err(|err| crate::logs::error(&format!("radio import failed, using yt-dlp: {err}")))
+                        .ok()
+                })
+            } else {
+                None
+            };
+            let (tracks, error) = match radio.map(Ok).unwrap_or_else(|| crate::ytdlp::playlist_tracks(&url)) {
                 Ok(tracks) => (tracks, None),
                 Err(err) => (Vec::new(), Some(err)),
             };

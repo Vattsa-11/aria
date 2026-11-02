@@ -19,6 +19,7 @@ mod normalize;
 mod player;
 mod proc;
 mod queue;
+mod radio;
 mod settings;
 mod sleep;
 mod stats;
