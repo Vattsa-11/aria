@@ -1,0 +1,1441 @@
+
+use std::time::{Duration, Instant};
+
+use egui::{
+    Align2, Color32, CornerRadius, FontId, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui,
+    Vec2,
+};
+
+use crate::app::App;
+use crate::model::{fmt_optional_time, fmt_time};
+use crate::settings::RepeatMode;
+use crate::ui::icons::{self, Icon};
+use crate::ui::theme::{accent, palette, Palette};
+
+pub const MIN_WIDTH: f32 = 280.0;
+pub const MIN_HEIGHT: f32 = 80.0;
+pub const MAX_WIDTH: f32 = 480.0;
+pub const MAX_HEIGHT: f32 = 640.0;
+
+pub fn viewport_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("aria-miniplayer")
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MiniLayout {
+    Compact,
+    Medium,
+    Large,
+}
+
+impl MiniLayout {
+    pub fn for_height(height: f32) -> Self {
+        if height < 120.0 {
+            Self::Compact
+        } else if height <= 300.0 {
+            Self::Medium
+        } else {
+            Self::Large
+        }
+    }
+}
+
+pub struct MiniState {
+    pub open: bool,
+    pub placed: bool,
+    pub swipe: Option<Pos2>,
+    pub press: Option<(Instant, bool)>,
+    pub marquee: Option<(String, Instant)>,
+    pub layout: Option<MiniLayout>,
+    pub prev: Option<MiniLayout>,
+    pub layout_at: Instant,
+    pub opacity: f32,
+    pub active_at: Instant,
+    pub layout_height: f32,
+    pub muted_from: Option<f32>,
+}
+
+impl Default for MiniState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            placed: false,
+            swipe: None,
+            press: None,
+            marquee: None,
+            layout: None,
+            prev: None,
+            layout_at: Instant::now(),
+            opacity: 1.0,
+            active_at: Instant::now(),
+            layout_height: 0.0,
+            muted_from: None,
+        }
+    }
+}
+
+impl MiniState {
+    fn reset_view(&mut self) {
+        self.placed = false;
+        self.swipe = None;
+        self.press = None;
+        self.marquee = None;
+        self.layout = None;
+        self.prev = None;
+        self.layout_height = 0.0;
+    }
+
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
+        if self.open {
+            self.opacity = 0.0;
+            self.active_at = Instant::now();
+        }
+        self.reset_view();
+    }
+
+    pub fn close(&mut self) {
+        self.open = false;
+        self.reset_view();
+    }
+}
+
+pub const LAYOUT_FADE: Duration = Duration::from_millis(180);
+
+pub const MIN_OPACITY: f32 = 0.3;
+
+pub const FADE_FACTOR: f32 = 0.45;
+
+pub const FADE_IDLE: Duration = Duration::from_millis(2500);
+
+pub fn transition_t(elapsed: Duration) -> f32 {
+    let x = (elapsed.as_secs_f32() / LAYOUT_FADE.as_secs_f32()).clamp(0.0, 1.0);
+    1.0 - (1.0 - x) * (1.0 - x)
+}
+
+pub fn fade_target(base: f32, auto_fade: bool, active: bool) -> f32 {
+    let base = base.clamp(MIN_OPACITY, 1.0);
+    if auto_fade && !active {
+        (base * FADE_FACTOR).max(MIN_OPACITY * FADE_FACTOR)
+    } else {
+        base
+    }
+}
+
+pub fn approach_opacity(current: f32, target: f32, dt: f32) -> f32 {
+    let step = (dt * 9.0).clamp(0.0, 1.0);
+    current + (target - current) * step
+}
+
+pub fn show(app: &mut App, ctx: &egui::Context) {
+    if !app.mini.open {
+        return;
+    }
+
+    let width = app.settings.mini.width.clamp(MIN_WIDTH, MAX_WIDTH);
+    let height = app.settings.mini.height.clamp(MIN_HEIGHT, MAX_HEIGHT);
+
+    let monitor = ctx.input(|input| input.viewport().monitor_size);
+    let mut position = match (app.settings.mini.x, app.settings.mini.y) {
+        (Some(x), Some(y)) => Some(Pos2::new(x, y)),
+        _ => monitor.map(|monitor| {
+            Pos2::new(
+                ((monitor.x - width) * 0.5).max(0.0),
+                (monitor.y - height - 90.0).max(0.0),
+            )
+        }),
+    };
+    if let (Some(pos), Some(monitor)) = (position.as_mut(), monitor) {
+        pos.x = pos.x.clamp(0.0, (monitor.x - width).max(0.0));
+        pos.y = pos.y.clamp(0.0, (monitor.y - height).max(0.0));
+    }
+
+    let mut builder = egui::ViewportBuilder::default()
+        .with_title("Aria")
+        .with_decorations(false)
+        .with_always_on_top()
+        .with_resizable(true)
+        .with_min_inner_size([MIN_WIDTH, MIN_HEIGHT])
+        .with_max_inner_size([MAX_WIDTH, MAX_HEIGHT]);
+
+    if !app.mini.placed {
+        builder = builder.with_inner_size([width, height]);
+        if let Some(pos) = position {
+            builder = builder.with_position([pos.x, pos.y]);
+        }
+    }
+
+    let id = viewport_id();
+    let main_ctx = ctx.clone();
+    ctx.show_viewport_immediate(
+        id,
+        builder,
+        |ui: &mut Ui, _class: egui::ViewportClass| {
+            app.mini.placed = true;
+            let ctx = ui.ctx().clone();
+            let (close_requested, outer_rect) = ctx.input(|input| {
+                let vp = input.viewport();
+                (vp.close_requested(), vp.outer_rect)
+            });
+
+            if close_requested {
+                app.close_mini(&ctx);
+                return;
+            }
+
+            let rect = ui.max_rect();
+            let width = rect.width().clamp(MIN_WIDTH, MAX_WIDTH);
+            let height = rect.height().clamp(MIN_HEIGHT, MAX_HEIGHT);
+            let position = outer_rect.map(|outer| (outer.min.x, outer.min.y));
+            let moved = match (position, app.settings.mini.x, app.settings.mini.y) {
+                (Some((x, y)), Some(ox), Some(oy)) => (x - ox).abs() > 0.5 || (y - oy).abs() > 0.5,
+                _ => true,
+            };
+            let resized = (app.settings.mini.width - width).abs() > 0.5
+                || (app.settings.mini.height - height).abs() > 0.5;
+            app.settings.mini.width = width;
+            app.settings.mini.height = height;
+            if let Some((x, y)) = position {
+                app.settings.mini.x = Some(x);
+                app.settings.mini.y = Some(y);
+            }
+            if moved || resized {
+                app.flush_mini_geometry(&main_ctx);
+            }
+
+            let accent = accent(&app.settings);
+            let pal = palette(app.settings.theme);
+            paint_shell(ui, rect, &pal);
+            background_drag(ui, rect);
+
+            let layout = MiniLayout::for_height(rect.height());
+            if (app.mini.layout_height - height).abs() > 0.5 {
+                app.mini.layout_height = height;
+            } else if app.mini.layout != Some(layout) {
+                app.mini.prev = app.mini.layout;
+                app.mini.layout = Some(layout);
+                app.mini.layout_at = Instant::now();
+            }
+            let blend = transition_t(app.mini.layout_at.elapsed());
+            if blend < 1.0 {
+                ctx.request_repaint_after(Duration::from_millis(16));
+                if let Some(previous) = app.mini.prev {
+                    ui.scope(|ui| {
+                        ui.set_opacity(1.0 - blend);
+                        draw_layout(previous, app, ui, rect, accent, &pal);
+                    });
+                }
+            } else {
+                app.mini.prev = None;
+            }
+            ui.scope(|ui| {
+                ui.set_opacity(if blend < 1.0 { blend } else { 1.0 });
+                draw_layout(layout, app, ui, rect, accent, &pal);
+            });
+
+            resize_borders(ui, rect, &pal);
+            close_button(app, ui, rect, &accent, &pal);
+            apply_opacity(app, ui, rect, outer_rect);
+
+            if app.is_playing() {
+                ctx.request_repaint_after(Duration::from_millis(120));
+            }
+        },
+    );
+}
+
+fn draw_layout(
+    layout: MiniLayout,
+    app: &mut App,
+    ui: &mut Ui,
+    rect: Rect,
+    accent: Color32,
+    pal: &Palette,
+) {
+    match layout {
+        MiniLayout::Compact => compact(app, ui, rect, accent, pal),
+        MiniLayout::Medium => medium(app, ui, rect, accent, pal),
+        MiniLayout::Large => large(app, ui, rect, accent, pal),
+    }
+}
+
+fn apply_opacity(app: &mut App, ui: &Ui, rect: Rect, outer: Option<Rect>) {
+    let hovering = ui.rect_contains_pointer(rect);
+    if hovering {
+        app.mini.active_at = Instant::now();
+    }
+    let idle = !hovering && app.mini.active_at.elapsed() > FADE_IDLE;
+    let target = fade_target(app.settings.mini_opacity, app.settings.mini_auto_fade, !idle);
+    let dt = ui.input(|input| input.stable_dt).min(0.1);
+    let next = approach_opacity(app.mini.opacity, target, dt);
+    if (next - app.mini.opacity).abs() > 0.002 {
+        app.mini.opacity = next;
+        ui.ctx().request_repaint_after(Duration::from_millis(24));
+    }
+    if let Some(outer) = outer {
+        let scale = ui.ctx().pixels_per_point();
+        layer::set_opacity(outer, scale, app.mini.opacity);
+    }
+}
+
+#[cfg(windows)]
+mod layer {
+    use std::ffi::c_void;
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    use egui::Rect;
+
+    type Hwnd = *mut c_void;
+
+    #[repr(C)]
+    struct WinRect {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn EnumWindows(callback: extern "system" fn(Hwnd, isize) -> i32, lparam: isize) -> i32;
+        fn GetWindowThreadProcessId(hwnd: Hwnd, pid: *mut u32) -> u32;
+        fn GetWindowRect(hwnd: Hwnd, rect: *mut WinRect) -> i32;
+        fn IsWindowVisible(hwnd: Hwnd) -> i32;
+        fn GetWindowLongPtrW(hwnd: Hwnd, index: i32) -> isize;
+        fn SetWindowLongPtrW(hwnd: Hwnd, index: i32, value: isize) -> isize;
+        fn SetLayeredWindowAttributes(hwnd: Hwnd, key: u32, alpha: u8, flags: u32) -> i32;
+    }
+
+    const GWL_EXSTYLE: i32 = -20;
+    const WS_EX_LAYERED: isize = 0x0008_0000;
+    const LWA_ALPHA: u32 = 0x0000_0002;
+
+    struct Search {
+        pid: u32,
+        bounds: (i32, i32, i32, i32),
+        found: Hwnd,
+    }
+
+    static LAST_ALPHA: AtomicU8 = AtomicU8::new(0);
+
+    extern "system" fn visit(hwnd: Hwnd, lparam: isize) -> i32 {
+        let search = unsafe { &mut *(lparam as *mut Search) };
+        let mut pid = 0u32;
+        unsafe {
+            GetWindowThreadProcessId(hwnd, &mut pid);
+        }
+        if pid != search.pid || unsafe { IsWindowVisible(hwnd) } == 0 {
+            return 1;
+        }
+        let mut rect = WinRect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        unsafe {
+            GetWindowRect(hwnd, &mut rect);
+        }
+        let (x, y, w, h) = search.bounds;
+        if (rect.left - x).abs() <= 2
+            && (rect.top - y).abs() <= 2
+            && (rect.right - rect.left - w).abs() <= 2
+            && (rect.bottom - rect.top - h).abs() <= 2
+        {
+            search.found = hwnd;
+            return 0;
+        }
+        1
+    }
+
+    pub fn set_opacity(outer: Rect, scale: f32, opacity: f32) {
+        let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u8;
+        if LAST_ALPHA.swap(alpha, Ordering::Relaxed) == alpha {
+            return;
+        }
+        let mut search = Search {
+            pid: std::process::id(),
+            bounds: (
+                (outer.min.x * scale).round() as i32,
+                (outer.min.y * scale).round() as i32,
+                (outer.width() * scale).round() as i32,
+                (outer.height() * scale).round() as i32,
+            ),
+            found: std::ptr::null_mut(),
+        };
+        unsafe {
+            EnumWindows(visit, &mut search as *mut Search as isize);
+        }
+        if search.found.is_null() {
+            return;
+        }
+        unsafe {
+            let style = GetWindowLongPtrW(search.found, GWL_EXSTYLE);
+            if style & WS_EX_LAYERED == 0 {
+                SetWindowLongPtrW(search.found, GWL_EXSTYLE, style | WS_EX_LAYERED);
+            }
+            SetLayeredWindowAttributes(search.found, 0, alpha, LWA_ALPHA);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+mod layer {
+    use egui::Rect;
+
+    pub fn set_opacity(_outer: Rect, _scale: f32, _opacity: f32) {}
+}
+
+fn paint_shell(ui: &Ui, rect: Rect, pal: &Palette) {
+    ui.painter().rect_filled(rect, CornerRadius::ZERO, pal.bg);
+    ui.painter().rect_stroke(
+        rect.shrink(0.5),
+        CornerRadius::same(2),
+        Stroke::new(1.0, pal.line),
+        StrokeKind::Inside,
+    );
+}
+
+pub const EDGE_ZONE: f32 = 16.0;
+pub const CORNER_ZONE: f32 = 28.0;
+pub const GRIP_SIZE: f32 = 28.0;
+
+pub const PRESETS: [(&str, f32, f32); 3] = [
+    ("Compact", 280.0, 80.0),
+    ("Medium", 340.0, 200.0),
+    ("Large", 340.0, 440.0),
+];
+
+fn close_hit(rect: Rect) -> Rect {
+    Rect::from_min_size(egui::pos2(rect.max.x - 44.0, rect.min.y), Vec2::splat(44.0))
+}
+
+pub fn zone_at(rect: Rect, pos: Pos2) -> Option<egui::ResizeDirection> {
+    use egui::ResizeDirection as D;
+    if !rect.contains(pos) || close_hit(rect).contains(pos) {
+        return None;
+    }
+    let left = pos.x - rect.min.x;
+    let right = rect.max.x - pos.x;
+    let top = pos.y - rect.min.y;
+    let bottom = rect.max.y - pos.y;
+    let near_x = left < CORNER_ZONE || right < CORNER_ZONE;
+    let near_y = top < CORNER_ZONE || bottom < CORNER_ZONE;
+    if near_x && near_y {
+        return Some(match (left < right, top < bottom) {
+            (true, true) => D::NorthWest,
+            (false, true) => D::NorthEast,
+            (true, false) => D::SouthWest,
+            (false, false) => D::SouthEast,
+        });
+    }
+    if left < EDGE_ZONE {
+        Some(D::West)
+    } else if right < EDGE_ZONE {
+        Some(D::East)
+    } else if top < EDGE_ZONE {
+        Some(D::North)
+    } else if bottom < EDGE_ZONE {
+        Some(D::South)
+    } else {
+        None
+    }
+}
+
+fn is_manual(direction: egui::ResizeDirection) -> bool {
+    use egui::ResizeDirection as D;
+    matches!(direction, D::East | D::South | D::SouthEast)
+}
+
+pub fn manual_size(direction: egui::ResizeDirection, start: Vec2, delta: Vec2) -> Vec2 {
+    use egui::ResizeDirection as D;
+    let mut size = start;
+    if matches!(direction, D::East | D::SouthEast) {
+        size.x += delta.x;
+    }
+    if matches!(direction, D::South | D::SouthEast) {
+        size.y += delta.y;
+    }
+    Vec2::new(
+        size.x.clamp(MIN_WIDTH, MAX_WIDTH),
+        size.y.clamp(MIN_HEIGHT, MAX_HEIGHT),
+    )
+}
+
+fn cursor_for(direction: egui::ResizeDirection) -> egui::CursorIcon {
+    use egui::{CursorIcon as C, ResizeDirection as D};
+    match direction {
+        D::North | D::South => C::ResizeVertical,
+        D::East | D::West => C::ResizeHorizontal,
+        D::NorthWest | D::SouthEast => C::ResizeNwSe,
+        D::NorthEast | D::SouthWest => C::ResizeNeSw,
+    }
+}
+
+fn resize_borders(ui: &mut Ui, rect: Rect, pal: &Palette) {
+    use egui::ViewportCommand;
+    let drag_id = ui.scope_id().with("mini-manual-resize");
+    let (press, latest, down, hover) = ui.input(|input| {
+        (
+            if input.pointer.primary_pressed() { input.pointer.press_origin() } else { None },
+            input.pointer.latest_pos(),
+            input.pointer.primary_down(),
+            input.pointer.hover_pos(),
+        )
+    });
+
+    if let Some(origin) = press {
+        if let Some(direction) = zone_at(rect, origin) {
+            if is_manual(direction) {
+                ui.data_mut(|data| data.insert_temp(drag_id, (direction, origin, rect.size())));
+            } else {
+                ui.ctx().send_viewport_cmd(ViewportCommand::BeginResize(direction));
+            }
+        }
+    }
+
+    let active: Option<(egui::ResizeDirection, Pos2, Vec2)> = ui.data(|data| data.get_temp(drag_id));
+    if let Some((direction, origin, start)) = active {
+        if down {
+            if let Some(now) = latest {
+                let size = manual_size(direction, start, now - origin);
+                if (size - rect.size()).length() > 0.5 {
+                    ui.ctx().send_viewport_cmd(ViewportCommand::InnerSize(size));
+                }
+            }
+            ui.ctx().set_cursor_icon(cursor_for(direction));
+        } else {
+            ui.data_mut(|data| data.remove::<(egui::ResizeDirection, Pos2, Vec2)>(drag_id));
+        }
+    } else if let Some(direction) = hover.and_then(|pos| zone_at(rect, pos)) {
+        ui.ctx().set_cursor_icon(cursor_for(direction));
+    }
+
+    if rect.height() >= 120.0 {
+        let grip = Rect::from_min_max(
+            egui::pos2(rect.max.x - GRIP_SIZE * 0.6, rect.max.y - GRIP_SIZE * 0.6),
+            egui::pos2(rect.max.x - 5.0, rect.max.y - 5.0),
+        );
+        let stroke = Stroke::new(1.5, pal.muted);
+        for step in 0..3 {
+            let offset = step as f32 * 4.5;
+            ui.painter().line_segment(
+                [
+                    egui::pos2(grip.max.x - offset, grip.max.y),
+                    egui::pos2(grip.max.x, grip.max.y - offset),
+                ],
+                stroke,
+            );
+        }
+    }
+}
+
+fn background_drag(ui: &mut Ui, rect: Rect) {
+
+    let response = ui.interact(rect, ui.scope_id().with("mini-bg"), Sense::drag());
+    if response.drag_started() {
+        ui.ctx()
+            .send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+}
+
+fn close_button(app: &mut App, ui: &mut Ui, rect: Rect, accent: &Color32, pal: &Palette) {
+    let hit = close_hit(rect);
+    let button = Rect::from_center_size(hit.center(), Vec2::splat(30.0));
+    let response = ui.interact(hit, ui.scope_id().with("mini-close"), Sense::click());
+    let active = response.hovered() || response.is_pointer_button_down_on();
+    ui.painter().rect_filled(
+        button,
+        CornerRadius::same(15),
+        if active { pal.raised } else { pal.bg.gamma_multiply(0.85) },
+    );
+    icons::draw(
+        ui.painter(),
+        Rect::from_center_size(button.center(), Vec2::splat(14.0)),
+        Icon::Close,
+        if active { *accent } else { pal.muted },
+    );
+    if response.clicked() {
+        let ctx = ui.ctx().clone();
+        app.close_mini(&ctx);
+    }
+}
+
+fn icon_button(ui: &mut Ui, id: egui::Id, rect: Rect, icon: Icon, tint: Color32, active: bool) -> Response {
+    let response = ui.interact(rect, id, Sense::click());
+    let radius = CornerRadius::same(10);
+    if active {
+        ui.painter()
+            .rect_filled(rect, radius, tint.gamma_multiply(0.2));
+    } else if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, radius, ui.visuals().widgets.hovered.weak_bg_fill);
+    }
+    icons::draw(
+        ui.painter(),
+        Rect::from_center_size(rect.center(), Vec2::splat(rect.width().min(rect.height()) * 0.46)),
+        icon,
+        tint,
+    );
+    response
+}
+
+fn play_button(ui: &mut Ui, id: egui::Id, rect: Rect, playing: bool, accent: Color32) -> Response {
+    let response = ui.interact(rect, id, Sense::click());
+    let fill = if response.hovered() {
+        accent.gamma_multiply(1.15)
+    } else {
+        accent
+    };
+    ui.painter()
+        .circle_filled(rect.center(), rect.width() * 0.5, fill);
+    icons::draw(
+        ui.painter(),
+        Rect::from_center_size(rect.center(), Vec2::splat(rect.width() * 0.42)),
+        if playing { Icon::Pause } else { Icon::Play },
+        Color32::from_rgb(12, 12, 15),
+    );
+    response
+}
+
+fn seek_bar(
+    ui: &mut Ui,
+    rect: Rect,
+    position: f64,
+    duration: f64,
+    accent: Color32,
+    pal: &Palette,
+) -> Option<f64> {
+    let response = ui.interact(rect, egui::Id::unique("mini-seek"), Sense::click_and_drag());
+    let track = Rect::from_center_size(rect.center(), Vec2::new(rect.width(), 4.0));
+    ui.painter()
+        .rect_filled(track, CornerRadius::same(2), pal.raised);
+    let fraction = if duration > 0.0 {
+        (position / duration).clamp(0.0, 1.0) as f32
+    } else {
+        0.0
+    };
+    let filled = Rect::from_min_size(
+        track.min,
+        Vec2::new(track.width() * fraction, track.height()),
+    );
+    if fraction > 0.0 {
+        ui.painter()
+            .rect_filled(filled, CornerRadius::same(2), accent);
+    }
+    let active = response.hovered() || response.dragged();
+    if duration > 0.0 {
+        ui.painter().circle_filled(
+            egui::pos2(filled.max.x, track.center().y),
+            if active { 7.0 } else { 5.0 },
+            if active { Color32::WHITE } else { accent },
+        );
+    }
+    if let Some(pointer) = response.interact_pointer_pos() {
+        if response.clicked() || response.dragged() {
+            let relative = (pointer.x - track.min.x) / track.width().max(1.0);
+            return Some((relative.clamp(0.0, 1.0) as f64) * duration);
+        }
+    }
+    None
+}
+
+fn volume_slider(
+    ui: &mut Ui,
+    rect: Rect,
+    value: f32,
+    accent: Color32,
+    pal: &Palette,
+) -> Option<f32> {
+    let response = ui.interact(rect, egui::Id::unique("mini-volume"), Sense::click_and_drag());
+    let track = Rect::from_center_size(rect.center(), Vec2::new(rect.width(), 4.0));
+    ui.painter()
+        .rect_filled(track, CornerRadius::same(2), pal.raised);
+    let value = value.clamp(0.0, 1.0);
+    let filled = Rect::from_min_size(
+        track.min,
+        Vec2::new(track.width() * value, track.height()),
+    );
+    ui.painter()
+        .rect_filled(filled, CornerRadius::same(2), accent);
+    if response.hovered() || response.dragged() {
+        ui.painter()
+            .circle_filled(egui::pos2(filled.max.x, track.center().y), 6.0, Color32::WHITE);
+    }
+    if let Some(pointer) = response.interact_pointer_pos() {
+        if response.clicked() || response.dragged() {
+            let relative = (pointer.x - track.min.x) / track.width().max(1.0);
+            return Some(relative.clamp(0.0, 1.0));
+        }
+    }
+    None
+}
+
+fn art(ui: &Ui, rect: Rect, accent: Color32, pal: &Palette) {
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(12), pal.raised);
+    ui.painter().rect_stroke(
+        rect,
+        CornerRadius::same(12),
+        Stroke::new(1.0, pal.line),
+        StrokeKind::Inside,
+    );
+    icons::draw(
+        ui.painter(),
+        Rect::from_center_size(rect.center(), Vec2::splat(rect.width() * 0.34)),
+        Icon::Note,
+        accent.gamma_multiply(0.9),
+    );
+}
+
+fn track_title(app: &App) -> String {
+    app.current
+        .as_ref()
+        .map(|track| track.title.clone())
+        .unwrap_or_else(|| "Nothing playing".to_string())
+}
+
+fn track_artist(app: &App) -> String {
+    app.current
+        .as_ref()
+        .map(|track| track.display_artist().to_string())
+        .unwrap_or_else(|| "Add a local file to start".to_string())
+}
+
+fn scroll_offset(ui: &Ui, app: &mut App, text: &str, width: f32) -> f32 {
+    let speed = 28.0;
+    let measured = ui
+        .painter()
+        .layout_no_wrap(
+            text.to_owned(),
+            FontId::proportional(12.5),
+            Color32::WHITE,
+        )
+        .size()
+        .x;
+    if measured <= width {
+        return 0.0;
+    }
+    match &app.mini.marquee {
+        Some((current, start)) if current == text => {
+            let hold = 2.5;
+            let cycle = hold + (measured + 48.0) / speed;
+            let time = start.elapsed().as_secs_f32() % cycle;
+            if time < hold {
+                0.0
+            } else {
+                (time - hold) * speed
+            }
+        }
+        _ => {
+            app.mini.marquee = Some((text.to_string(), Instant::now()));
+            0.0
+        }
+    }
+}
+
+fn paint_scrolled_text(ui: &Ui, rect: Rect, text: &str, size: f32, color: Color32, offset: f32) {
+    let painter = ui.painter();
+    let galley = painter.layout_no_wrap(text.to_owned(), FontId::proportional(size), color);
+    let clip = painter.with_clip_rect(rect);
+    clip.galley(
+        egui::pos2(rect.min.x - offset, rect.center().y - galley.size().y * 0.5),
+        galley,
+        color,
+    );
+}
+
+fn transport(app: &mut App, ui: &mut Ui, row: Rect, accent: Color32, pal: &Palette, with_small: bool) {
+    let play_size = 46.0;
+    let small = if with_small { 40.0 } else { 34.0 };
+    let gap = 4.0;
+    let total = if with_small {
+        small * 4.0 + play_size + gap * 4.0
+    } else {
+        small * 2.0 + play_size + gap * 2.0
+    };
+    let mut x = row.center().x - total * 0.5;
+    let center_y = row.center().y;
+
+    if with_small {
+        let shuffle_on = app.settings.shuffle;
+        let rect = Rect::from_center_size(egui::pos2(x + small * 0.5, center_y), Vec2::splat(small));
+        if icon_button(
+            ui,
+            egui::Id::unique("mini-shuffle"),
+            rect,
+            Icon::Shuffle,
+            if shuffle_on { accent } else { pal.muted },
+            shuffle_on,
+        )
+        .clicked()
+        {
+            app.toggle_shuffle();
+        }
+        x += small + gap;
+    }
+
+    let prev = Rect::from_center_size(egui::pos2(x + small * 0.5, center_y), Vec2::splat(small));
+    if icon_button(ui, egui::Id::unique("mini-prev"), prev, Icon::Prev, pal.text, false).clicked() {
+        app.previous();
+    }
+    x += small + gap;
+
+    let play = Rect::from_center_size(egui::pos2(x + play_size * 0.5, center_y), Vec2::splat(play_size));
+    if play_button(ui, egui::Id::unique("mini-play"), play, app.is_playing(), accent).clicked() {
+        app.toggle_play();
+    }
+    x += play_size + gap;
+
+    let next = Rect::from_center_size(egui::pos2(x + small * 0.5, center_y), Vec2::splat(small));
+    if icon_button(ui, egui::Id::unique("mini-next"), next, Icon::Next, pal.text, false).clicked() {
+        app.play_advance(false);
+    }
+    x += small + gap;
+
+    if with_small {
+        let (icon, on) = match app.settings.repeat {
+            RepeatMode::Off => (Icon::Repeat, false),
+            RepeatMode::All => (Icon::Repeat, true),
+            RepeatMode::One => (Icon::RepeatOne, true),
+        };
+        let rect = Rect::from_center_size(egui::pos2(x + small * 0.5, center_y), Vec2::splat(small));
+        if icon_button(
+            ui,
+            egui::Id::unique("mini-repeat"),
+            rect,
+            icon,
+            if on { accent } else { pal.muted },
+            on,
+        )
+        .clicked()
+        {
+            app.cycle_repeat();
+        }
+    }
+}
+
+fn like_button(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette) {
+    let liked = app.liked_current();
+    if icon_button(
+        ui,
+        egui::Id::unique("mini-like"),
+        rect,
+        if liked { Icon::HeartFilled } else { Icon::Heart },
+        if liked { accent } else { pal.muted },
+        liked,
+    )
+    .clicked()
+    {
+        app.toggle_like_current();
+    }
+}
+
+pub fn fit_text(text: &str, max_width: f32, measure: impl Fn(&str) -> f32) -> String {
+    if measure(text) <= max_width {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let (mut low, mut high) = (0usize, chars.len());
+    while low < high {
+        let mid = (low + high).div_ceil(2);
+        let candidate: String = chars[..mid].iter().collect::<String>().trim_end().to_string() + "…";
+        if measure(&candidate) <= max_width {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    if low == 0 {
+        return "…".to_string();
+    }
+    chars[..low].iter().collect::<String>().trim_end().to_string() + "…"
+}
+
+fn text_line(ui: &Ui, rect: Rect, text: &str, size: f32, color: Color32, align: Align2) {
+    let font = FontId::proportional(size);
+    let painter = ui.painter();
+    let fitted = fit_text(text, rect.width(), |candidate| {
+        painter
+            .layout_no_wrap(candidate.to_owned(), font.clone(), color)
+            .size()
+            .x
+    });
+    let anchor = match align {
+        Align2::RIGHT_CENTER => egui::pos2(rect.max.x, rect.center().y),
+        Align2::CENTER_CENTER => rect.center(),
+        _ => egui::pos2(rect.min.x, rect.center().y),
+    };
+    painter.with_clip_rect(rect).text(anchor, align, fitted, font, color);
+}
+
+fn volume_row(app: &mut App, ui: &mut Ui, row: Rect, accent: Color32, pal: &Palette) {
+    let mute = Rect::from_center_size(
+        egui::pos2(row.min.x + 18.0, row.center().y),
+        Vec2::splat(36.0),
+    );
+    let muted = app.settings.volume <= 0.0;
+    if icon_button(
+        ui,
+        egui::Id::unique("mini-mute"),
+        mute,
+        Icon::Volume,
+        if muted { pal.line } else { pal.muted },
+        false,
+    )
+    .clicked()
+    {
+        if muted {
+            let restore = app.mini.muted_from.take().unwrap_or(0.7);
+            app.set_volume(restore);
+        } else {
+            app.mini.muted_from = Some(app.settings.volume);
+            app.set_volume(0.0);
+        }
+    }
+    let slider = Rect::from_min_max(
+        egui::pos2(mute.max.x + 6.0, row.center().y - 16.0),
+        egui::pos2(row.max.x - 6.0, row.center().y + 16.0),
+    );
+    if let Some(value) = volume_slider(ui, slider, app.settings.volume, accent, pal) {
+        app.set_volume(value);
+    }
+}
+
+fn swipe_zone(app: &mut App, ui: &mut Ui, rect: Rect, salt: &'static str) {
+    let response = ui.interact(rect, ui.scope_id().with(salt), Sense::drag());
+    if response.drag_started() {
+        app.mini.swipe = response.interact_pointer_pos();
+        app.mini.press = None;
+    }
+    if response.drag_stopped() {
+        if let (Some(start), Some(end)) = (app.mini.swipe.take(), response.interact_pointer_pos()) {
+            let dx = end.x - start.x;
+            if dx < -60.0 {
+                app.play_advance(false);
+            } else if dx > 60.0 {
+                app.previous();
+            }
+        }
+    }
+}
+
+fn gestures(app: &mut App, ui: &mut Ui, rect: Rect) {
+    let response = ui.interact(rect, ui.scope_id().with("mini-gesture"), Sense::click_and_drag());
+
+    if response.drag_started() {
+        app.mini.swipe = response.interact_pointer_pos();
+        app.mini.press = None;
+    }
+
+    if response.drag_stopped() {
+        if let (Some(start), Some(end)) = (app.mini.swipe.take(), response.interact_pointer_pos()) {
+            let dx = end.x - start.x;
+            if dx < -60.0 {
+                app.play_advance(false);
+            } else if dx > 60.0 {
+                app.previous();
+            }
+        }
+        return;
+    }
+
+    if response.is_pointer_button_down_on() && !response.dragged() {
+        let press = app.mini.press.get_or_insert((Instant::now(), false));
+        if !press.1 && press.0.elapsed() >= Duration::from_millis(600) {
+            press.1 = true;
+            app.toggle_like_current();
+        }
+    }
+
+    if response.clicked() {
+        let long_pressed = app.mini.press.take().map(|(_, fired)| fired).unwrap_or(false);
+        if !long_pressed {
+            let ctx = ui.ctx().clone();
+            app.close_mini(&ctx);
+        }
+    } else if !response.is_pointer_button_down_on() {
+        app.mini.press = None;
+    }
+}
+
+fn large(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette) {
+    let pad = 16.0;
+    let inner = rect.width() - pad * 2.0;
+    let art_size = (rect.height() * 0.3).clamp(72.0, 220.0).min(inner);
+    let art_rect = Rect::from_min_size(
+        egui::pos2(rect.center().x - art_size * 0.5, rect.min.y + pad),
+        Vec2::splat(art_size),
+    );
+    art(ui, art_rect, accent, pal);
+    gestures(app, ui, art_rect);
+
+    let heart_size = 40.0;
+    let info_top = art_rect.max.y + 10.0;
+    let text_width = inner - heart_size - 6.0;
+    let title_rect = Rect::from_min_size(
+        egui::pos2(rect.min.x + pad, info_top),
+        Vec2::new(text_width, 22.0),
+    );
+    let artist_rect = Rect::from_min_size(
+        egui::pos2(rect.min.x + pad, title_rect.max.y),
+        Vec2::new(text_width, 18.0),
+    );
+    text_line(ui, title_rect, &track_title(app), 15.5, pal.text, Align2::LEFT_CENTER);
+    text_line(ui, artist_rect, &track_artist(app), 12.0, pal.muted, Align2::LEFT_CENTER);
+    swipe_zone(
+        app,
+        ui,
+        Rect::from_min_max(title_rect.min, artist_rect.max),
+        "mini-large-swipe",
+    );
+    let like_rect = Rect::from_center_size(
+        egui::pos2(
+            rect.max.x - pad - heart_size * 0.5,
+            (title_rect.min.y + artist_rect.max.y) * 0.5,
+        ),
+        Vec2::splat(heart_size),
+    );
+    like_button(app, ui, like_rect, accent, pal);
+
+    let duration = app.duration().unwrap_or(0.0);
+    let position = app.position();
+    let seek_row = Rect::from_min_size(
+        egui::pos2(rect.min.x + pad, artist_rect.max.y + 6.0),
+        Vec2::new(inner, 24.0),
+    );
+    let time_font = FontId::proportional(10.5);
+    ui.painter().text(
+        egui::pos2(seek_row.min.x, seek_row.center().y),
+        Align2::LEFT_CENTER,
+        fmt_time(position),
+        time_font.clone(),
+        pal.muted,
+    );
+    ui.painter().text(
+        egui::pos2(seek_row.max.x, seek_row.center().y),
+        Align2::RIGHT_CENTER,
+        fmt_optional_time(if duration > 0.0 { Some(duration) } else { None }),
+        time_font,
+        pal.muted,
+    );
+    let seek_rect = Rect::from_min_max(
+        egui::pos2(seek_row.min.x + 42.0, seek_row.min.y),
+        egui::pos2(seek_row.max.x - 42.0, seek_row.max.y),
+    );
+    if let Some(target) = seek_bar(ui, seek_rect, position, duration, accent, pal) {
+        app.seek(target);
+    }
+
+    let transport_row = Rect::from_min_size(
+        egui::pos2(rect.min.x + pad, seek_row.max.y + 4.0),
+        Vec2::new(inner, 48.0),
+    );
+    transport(app, ui, transport_row, accent, pal, true);
+
+    let volume = Rect::from_min_size(
+        egui::pos2(rect.min.x + pad, transport_row.max.y + 4.0),
+        Vec2::new(inner, 36.0),
+    );
+    volume_row(app, ui, volume, accent, pal);
+
+    let upcoming: Vec<(bool, usize, String, String)> = {
+        let mut rows: Vec<(bool, usize, String, String)> = app
+            .queue
+            .user
+            .iter()
+            .take(4)
+            .enumerate()
+            .map(|(index, track)| (true, index, track.title.clone(), track.display_artist().to_string()))
+            .collect();
+        if rows.len() < 4 {
+            for (index, track) in app.queue.context_preview().into_iter().take(4 - rows.len()) {
+                rows.push((false, index, track.title.clone(), track.display_artist().to_string()));
+            }
+        }
+        rows
+    };
+    let row_height = 38.0;
+    let label_y = volume.max.y + 6.0;
+    let mut y = label_y + 18.0;
+    if upcoming.is_empty() || y + row_height > rect.max.y - pad {
+        return;
+    }
+    ui.painter().text(
+        egui::pos2(rect.min.x + pad, label_y),
+        Align2::LEFT_TOP,
+        "UP NEXT",
+        FontId::proportional(10.0),
+        pal.muted,
+    );
+
+    let mut jump_user: Option<usize> = None;
+    let mut jump_context: Option<usize> = None;
+    for (is_user, index, title, artist) in &upcoming {
+        if y + row_height > rect.max.y - pad {
+            break;
+        }
+        let row = Rect::from_min_size(egui::pos2(rect.min.x + pad, y), Vec2::new(inner, row_height));
+        let response = ui.interact(
+            row,
+            ui.scope_id().with(("mini-queue", *is_user, *index)),
+            Sense::click(),
+        );
+        if response.hovered() {
+            ui.painter().rect_filled(row, CornerRadius::same(8), pal.raised);
+        }
+        let thumb = Rect::from_min_size(
+            egui::pos2(row.min.x + 4.0, row.center().y - 15.0),
+            Vec2::splat(30.0),
+        );
+        queue_thumb(ui, thumb, accent, pal);
+        let text_left = thumb.max.x + 8.0;
+        let text_right = row.max.x - 6.0;
+        text_line(
+            ui,
+            Rect::from_min_max(
+                egui::pos2(text_left, row.min.y + 3.0),
+                egui::pos2(text_right, row.center().y),
+            ),
+            title,
+            12.0,
+            pal.text,
+            Align2::LEFT_CENTER,
+        );
+        text_line(
+            ui,
+            Rect::from_min_max(
+                egui::pos2(text_left, row.center().y),
+                egui::pos2(text_right, row.max.y - 3.0),
+            ),
+            artist,
+            10.0,
+            pal.muted,
+            Align2::LEFT_CENTER,
+        );
+        if response.clicked() {
+            if *is_user {
+                jump_user = Some(*index);
+            } else {
+                jump_context = Some(*index);
+            }
+        }
+        y += row_height;
+    }
+    if let Some(index) = jump_user {
+        app.jump_queue_user(index);
+    }
+    if let Some(index) = jump_context {
+        app.jump_queue_context(index);
+    }
+}
+
+fn queue_thumb(ui: &Ui, rect: Rect, accent: Color32, pal: &Palette) {
+    ui.painter().rect_filled(rect, CornerRadius::same(6), pal.raised);
+    icons::draw(
+        ui.painter(),
+        Rect::from_center_size(rect.center(), Vec2::splat(rect.width() * 0.46)),
+        Icon::Note,
+        accent.gamma_multiply(0.8),
+    );
+}
+
+fn medium(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette) {
+    let pad = 12.0;
+    let available = rect.height() - pad * 2.0;
+    let art_size = available.min(140.0).min(rect.width() * 0.38);
+    let art_rect = Rect::from_min_size(egui::pos2(rect.min.x + pad, rect.min.y + pad), Vec2::splat(art_size));
+    art(ui, art_rect, accent, pal);
+    gestures(app, ui, art_rect);
+
+    let text_x = art_rect.max.x + 12.0;
+    let text_right = rect.max.x - pad;
+    let roomy = available >= 110.0;
+
+    let title_rect = Rect::from_min_max(
+        egui::pos2(text_x, rect.min.y + pad),
+        egui::pos2(text_right, rect.min.y + pad + 20.0),
+    );
+    text_line(ui, title_rect, &track_title(app), 14.0, pal.text, Align2::LEFT_CENTER);
+
+    let mut y = title_rect.max.y;
+    if roomy {
+        let artist_rect = Rect::from_min_max(
+            egui::pos2(text_x, y),
+            egui::pos2(text_right, y + 16.0),
+        );
+        text_line(ui, artist_rect, &track_artist(app), 11.5, pal.muted, Align2::LEFT_CENTER);
+        y += 16.0;
+    }
+
+    swipe_zone(
+        app,
+        ui,
+        Rect::from_min_max(egui::pos2(text_x, rect.min.y + pad), egui::pos2(text_right, y)),
+        "mini-medium-swipe",
+    );
+
+    let duration = app.duration().unwrap_or(0.0);
+    let position = app.position();
+    let seek_row = Rect::from_min_max(
+        egui::pos2(text_x, y + 2.0),
+        egui::pos2(text_right, y + 2.0 + 24.0),
+    );
+    let time_font = FontId::proportional(10.0);
+    ui.painter().text(
+        egui::pos2(seek_row.min.x, seek_row.center().y),
+        Align2::LEFT_CENTER,
+        fmt_time(position),
+        time_font.clone(),
+        pal.muted,
+    );
+    ui.painter().text(
+        egui::pos2(seek_row.max.x, seek_row.center().y),
+        Align2::RIGHT_CENTER,
+        fmt_optional_time(if duration > 0.0 { Some(duration) } else { None }),
+        time_font,
+        pal.muted,
+    );
+    let seek_rect = Rect::from_min_max(
+        egui::pos2(seek_row.min.x + 38.0, seek_row.min.y),
+        egui::pos2(seek_row.max.x - 38.0, seek_row.max.y),
+    );
+    if let Some(target) = seek_bar(ui, seek_rect, position, duration, accent, pal) {
+        app.seek(target);
+    }
+
+    let buttons = Rect::from_min_max(
+        egui::pos2(text_x, seek_row.max.y),
+        egui::pos2(rect.max.x - pad, rect.max.y - pad),
+    );
+    let gap = 4.0;
+    let unit = ((buttons.width() - gap * 3.0) / 4.0)
+        .min(buttons.height().max(28.0))
+        .clamp(28.0, 46.0);
+    let total = unit * 4.0 + gap * 3.0;
+    let mut x = buttons.center().x - total * 0.5;
+    let cy = buttons.center().y;
+
+    let prev = Rect::from_center_size(egui::pos2(x + unit * 0.5, cy), Vec2::splat(unit));
+    if icon_button(ui, egui::Id::unique("mini-m-prev"), prev, Icon::Prev, pal.text, false).clicked() {
+        app.previous();
+    }
+    x += unit + gap;
+    let play = Rect::from_center_size(egui::pos2(x + unit * 0.5, cy), Vec2::splat(unit));
+    if play_button(ui, egui::Id::unique("mini-m-play"), play, app.is_playing(), accent).clicked() {
+        app.toggle_play();
+    }
+    x += unit + gap;
+    let next = Rect::from_center_size(egui::pos2(x + unit * 0.5, cy), Vec2::splat(unit));
+    if icon_button(ui, egui::Id::unique("mini-m-next"), next, Icon::Next, pal.text, false).clicked() {
+        app.play_advance(false);
+    }
+    x += unit + gap;
+    let like = Rect::from_center_size(egui::pos2(x + unit * 0.5, cy), Vec2::splat(unit));
+    like_button(app, ui, like, accent, pal);
+}
+
+fn compact(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette) {
+    let pad = 8.0;
+    let inner_h = rect.height() - pad * 2.0 - 3.0;
+    let art_size = inner_h.min(56.0);
+    let art_rect = Rect::from_min_size(
+        egui::pos2(rect.min.x + pad, rect.center().y - 1.5 - art_size * 0.5),
+        Vec2::splat(art_size),
+    );
+    art(ui, art_rect, accent, pal);
+    gestures(app, ui, art_rect);
+
+    let play_size = 44.0;
+    let next_size = 44.0;
+    let next_rect = Rect::from_center_size(
+        egui::pos2(rect.max.x - pad - next_size * 0.5, art_rect.center().y),
+        Vec2::splat(next_size),
+    );
+    let play_rect = Rect::from_center_size(
+        egui::pos2(next_rect.min.x - 2.0 - play_size * 0.5, art_rect.center().y),
+        Vec2::splat(play_size),
+    );
+
+    let text_rect = Rect::from_min_max(
+        egui::pos2(art_rect.max.x + 10.0, rect.min.y + pad),
+        egui::pos2(play_rect.min.x - 8.0, rect.max.y - pad - 3.0),
+    );
+    let label = format!("{}  ·  {}", track_title(app), track_artist(app));
+    swipe_zone(app, ui, text_rect, "mini-compact-swipe");
+    let offset = scroll_offset(ui, app, &label, text_rect.width());
+    if offset > 0.0 {
+        paint_scrolled_text(ui, text_rect, &label, 12.5, pal.text, offset);
+    } else {
+        text_line(ui, text_rect, &label, 12.5, pal.text, Align2::LEFT_CENTER);
+    }
+    if offset > 0.0 && app.is_playing() {
+        ui.ctx().request_repaint_after(Duration::from_millis(60));
+    } else if offset == 0.0 && app.mini.marquee.is_some() {
+
+        ui.ctx().request_repaint_after(Duration::from_millis(120));
+    }
+
+    if play_button(ui, egui::Id::unique("mini-c-play"), play_rect, app.is_playing(), accent).clicked() {
+        app.toggle_play();
+    }
+    if icon_button(
+        ui,
+        egui::Id::unique("mini-c-next"),
+        next_rect,
+        Icon::Next,
+        pal.text,
+        false,
+    )
+    .clicked()
+    {
+        app.play_advance(false);
+    }
+
+    let duration = app.duration().unwrap_or(0.0);
+    let fraction = if duration > 0.0 {
+        (app.position() / duration).clamp(0.0, 1.0) as f32
+    } else {
+        0.0
+    };
+    let line = Rect::from_min_size(
+        egui::pos2(rect.min.x, rect.max.y - 3.0),
+        Vec2::new(rect.width(), 3.0),
+    );
+    ui.painter()
+        .rect_filled(line, CornerRadius::ZERO, pal.raised);
+    ui.painter().rect_filled(
+        Rect::from_min_size(line.min, Vec2::new(line.width() * fraction, 3.0)),
+        CornerRadius::ZERO,
+        accent,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MiniLayout, MiniState};
+
+    #[test]
+    fn zones_use_edge_and_corner_sizes() {
+        use super::zone_at;
+        use egui::{pos2, Rect, ResizeDirection as D};
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(340.0, 440.0));
+        assert_eq!(zone_at(rect, pos2(330.0, 430.0)), Some(D::SouthEast));
+        assert_eq!(zone_at(rect, pos2(313.0, 413.0)), Some(D::SouthEast));
+        assert_eq!(zone_at(rect, pos2(5.0, 5.0)), Some(D::NorthWest));
+        assert_eq!(zone_at(rect, pos2(5.0, 430.0)), Some(D::SouthWest));
+        assert_eq!(zone_at(rect, pos2(170.0, 15.0)), Some(D::North));
+        assert_eq!(zone_at(rect, pos2(170.0, 17.0)), None);
+        assert_eq!(zone_at(rect, pos2(15.0, 200.0)), Some(D::West));
+        assert_eq!(zone_at(rect, pos2(17.0, 200.0)), None);
+        assert_eq!(zone_at(rect, pos2(330.0, 200.0)), Some(D::East));
+        assert_eq!(zone_at(rect, pos2(170.0, 430.0)), Some(D::South));
+        assert_eq!(zone_at(rect, pos2(325.0, 10.0)), None);
+        assert_eq!(zone_at(rect, pos2(170.0, 220.0)), None);
+    }
+
+    #[test]
+    fn manual_resize_clamps_to_limits() {
+        use super::manual_size;
+        use egui::{vec2, ResizeDirection as D};
+        let start = vec2(340.0, 200.0);
+        assert_eq!(manual_size(D::SouthEast, start, vec2(40.0, 60.0)), vec2(380.0, 260.0));
+        assert_eq!(manual_size(D::East, start, vec2(500.0, 500.0)), vec2(480.0, 200.0));
+        assert_eq!(manual_size(D::South, start, vec2(-500.0, -500.0)), vec2(340.0, 80.0));
+        assert_eq!(manual_size(D::SouthEast, start, vec2(-500.0, 0.0)), vec2(280.0, 200.0));
+    }
+
+    #[test]
+    fn presets_sit_inside_limits() {
+        use super::{MiniLayout, MAX_HEIGHT, MAX_WIDTH, MIN_HEIGHT, MIN_WIDTH, PRESETS};
+        for (_, w, h) in PRESETS {
+            assert!((MIN_WIDTH..=MAX_WIDTH).contains(&w));
+            assert!((MIN_HEIGHT..=MAX_HEIGHT).contains(&h));
+        }
+        assert_eq!(MiniLayout::for_height(PRESETS[0].2), MiniLayout::Compact);
+        assert_eq!(MiniLayout::for_height(PRESETS[1].2), MiniLayout::Medium);
+        assert_eq!(MiniLayout::for_height(PRESETS[2].2), MiniLayout::Large);
+    }
+
+    #[test]
+    fn fit_text_truncates_with_ellipsis() {
+        use super::fit_text;
+        let measure = |text: &str| text.chars().count() as f32 * 10.0;
+        assert_eq!(fit_text("Short", 100.0, measure), "Short");
+        assert_eq!(fit_text("Exactly10!", 100.0, measure), "Exactly10!");
+        let cut = fit_text("A very long song title indeed", 100.0, measure);
+        assert!(cut.ends_with('…'));
+        assert!(measure(&cut) <= 100.0);
+        assert_eq!(cut, "A very lo…");
+        assert_eq!(fit_text("Anything", 5.0, measure), "…");
+        assert_eq!(fit_text("", 0.0, measure), "");
+        let trimmed = fit_text("ab cd ef gh ij kl", 60.0, measure);
+        assert!(!trimmed.contains(" …"));
+    }
+
+    #[test]
+    fn close_hides_miniplayer_and_resets_view() {
+        let mut state = MiniState::default();
+        state.toggle();
+        assert!(state.open);
+        state.placed = true;
+        state.layout = Some(MiniLayout::Large);
+        state.layout_height = 440.0;
+        state.close();
+        assert!(!state.open);
+        assert!(!state.placed);
+        assert!(state.layout.is_none());
+        assert_eq!(state.layout_height, 0.0);
+        state.close();
+        assert!(!state.open);
+        state.toggle();
+        assert!(state.open);
+    }
+
+    #[test]
+    fn layout_transition_eases_to_one() {
+        use super::{transition_t, LAYOUT_FADE};
+        use std::time::Duration;
+        assert_eq!(transition_t(Duration::ZERO), 0.0);
+        let quarter = transition_t(LAYOUT_FADE / 4);
+        assert!(quarter > 0.4 && quarter < 0.6, "midpoint should be eased, got {quarter}");
+        assert_eq!(transition_t(LAYOUT_FADE), 1.0);
+        assert_eq!(transition_t(LAYOUT_FADE * 4), 1.0);
+    }
+
+    #[test]
+    fn opacity_fades_only_when_idle() {
+        use super::{fade_target, MIN_OPACITY};
+        assert_eq!(fade_target(1.0, false, true), 1.0);
+        assert_eq!(fade_target(1.0, false, false), 1.0);
+        assert_eq!(fade_target(1.0, true, true), 1.0);
+        let faded = fade_target(1.0, true, false);
+        assert!((MIN_OPACITY * 0.4..0.6).contains(&faded), "faded to {faded}");
+        assert_eq!(fade_target(0.1, false, true), MIN_OPACITY);
+        assert_eq!(fade_target(2.0, false, true), 1.0);
+    }
+
+    #[test]
+    fn opacity_approaches_without_overshooting() {
+        use super::approach_opacity;
+        let mut value = 1.0f32;
+        for _ in 0..120 {
+            let next = approach_opacity(value, 0.45, 0.016);
+            assert!(next <= value + f32::EPSILON);
+            value = next;
+        }
+        assert!((value - 0.45).abs() < 0.02, "settled at {value}");
+        assert_eq!(approach_opacity(0.5, 0.5, 0.016), 0.5);
+    }
+
+    #[test]
+    fn layout_thresholds_match_the_spec() {
+        assert_eq!(MiniLayout::for_height(80.0), MiniLayout::Compact);
+        assert_eq!(MiniLayout::for_height(119.0), MiniLayout::Compact);
+        assert_eq!(MiniLayout::for_height(120.0), MiniLayout::Medium);
+        assert_eq!(MiniLayout::for_height(200.0), MiniLayout::Medium);
+        assert_eq!(MiniLayout::for_height(300.0), MiniLayout::Medium);
+        assert_eq!(MiniLayout::for_height(301.0), MiniLayout::Large);
+        assert_eq!(MiniLayout::for_height(440.0), MiniLayout::Large);
+    }
+}

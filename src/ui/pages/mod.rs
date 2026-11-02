@@ -1,0 +1,22 @@
+pub mod home;
+pub mod library;
+pub mod search;
+pub mod settings;
+pub mod rows;
+pub mod liked;
+pub mod playlists;
+pub mod history;
+pub mod downloads;
+pub mod import;
+pub mod stats;
+
+pub use home::home;
+pub use library::library;
+pub use search::search;
+pub use settings::settings;
+pub use liked::liked;
+pub use playlists::playlists;
+pub use history::history;
+pub use downloads::downloads;
+pub use import::import;
+pub use stats::stats;

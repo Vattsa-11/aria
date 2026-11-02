@@ -1,0 +1,5 @@
+target/
+CLAUDE.md
+AGENTS.md
+.claude/
+freebuff-chat-*.md
