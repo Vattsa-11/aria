@@ -738,9 +738,7 @@ impl App {
     }
 
     pub fn import_file(&mut self) {
-        let file = rfd::FileDialog::new()
-            .add_filter("Track lists", &["csv", "txt", "m3u", "m3u8"])
-            .pick_file();
+        let file = crate::dialogs::pick_file("Track lists", &["csv", "txt", "m3u", "m3u8"]);
         let Some(path) = file else {
             return;
         };
@@ -1246,7 +1244,7 @@ impl App {
     }
 
     pub fn scan_folder(&mut self) {
-        let Some(folder) = rfd::FileDialog::new().pick_folder() else {
+        let Some(folder) = crate::dialogs::pick_folder() else {
             return;
         };
         let paths = collect_audio_files(&folder, 8);
@@ -1284,12 +1282,10 @@ impl App {
     }
 
     pub fn pick_files(&mut self) {
-        let files = rfd::FileDialog::new()
-            .add_filter(
-                "Audio",
-                &["mp3", "flac", "ogg", "oga", "m4a", "aac", "wav", "opus", "mp4"],
-            )
-            .pick_files();
+        let files = crate::dialogs::pick_files(
+            "Audio",
+            &["mp3", "flac", "ogg", "oga", "m4a", "aac", "wav", "opus", "mp4"],
+        );
         if let Some(files) = files {
             self.add_paths(files);
         }

@@ -386,7 +386,7 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
                         accent,
                     ) {
                         let folder = crate::downloads::dir();
-                        let _ = crate::proc::command("explorer").arg(folder).spawn();
+                        crate::proc::open_folder(&folder);
                     }
                     ui.add_space(8.0);
                     if crate::ui::widgets::pill_button(ui, "Rescan folders", false, accent, &pal) {

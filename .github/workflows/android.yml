@@ -1,0 +1,32 @@
+name: Android
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-apk
+        run: cargo install cargo-apk --locked
+      - name: Build APK
+        env:
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_NDK_LATEST_HOME }}
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
+        run: cargo apk build --release --lib
+      - name: Stage APK
+        run: |
+          mkdir dist
+          cp target/release/apk/aria.apk dist/aria-android-arm64.apk
+          cd dist && sha256sum aria-android-arm64.apk > aria-android-arm64.apk.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aria-android-arm64.apk
+          path: dist/*

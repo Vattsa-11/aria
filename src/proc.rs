@@ -41,3 +41,21 @@ pub fn console_handle() -> Option<std::fs::File> {
 pub fn console_handle() -> Option<std::fs::File> {
     None
 }
+
+pub fn open_folder(path: &std::path::Path) {
+    #[cfg(windows)]
+    let opener = "explorer";
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    let opener = "xdg-open";
+    #[cfg(target_os = "android")]
+    {
+        let _ = path;
+        return;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = command(opener).arg(path).spawn();
+    }
+}
