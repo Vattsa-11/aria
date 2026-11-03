@@ -10,6 +10,39 @@ use crate::ui::widgets::{self, icon_button, primary_icon_button, toggle_icon_but
 const TAB_H: f32 = 60.0;
 const MINI_H: f32 = 72.0;
 
+pub fn tab_height(window_height: f32) -> f32 {
+    if window_height >= 480.0 {
+        TAB_H
+    } else if window_height >= 340.0 {
+        48.0
+    } else {
+        40.0
+    }
+}
+
+pub fn mini_height(window_height: f32) -> f32 {
+    if window_height >= 480.0 {
+        MINI_H
+    } else if window_height >= 340.0 {
+        58.0
+    } else {
+        48.0
+    }
+}
+
+#[cfg(test)]
+mod height_tests {
+    use super::*;
+
+    #[test]
+    fn bars_shrink_as_the_window_gets_shorter_and_never_eat_it_whole() {
+        for height in [200.0, 260.0, 339.0, 340.0, 479.0, 480.0, 900.0] {
+            assert!(tab_height(height) + mini_height(height) <= height * 0.5, "{height}");
+        }
+        assert!(tab_height(300.0) < tab_height(500.0) && mini_height(300.0) < mini_height(500.0));
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
     Home,
@@ -66,8 +99,10 @@ pub fn top_inset(ui: &Ui) -> f32 {
 
 pub fn tab_bar(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
     let inset = bottom_inset(ui);
+    let tab_h = tab_height(ui.max_rect().height());
+    let icons_only = tab_h < 56.0;
     egui::Panel::bottom("phone_tabs")
-        .exact_size(TAB_H + inset)
+        .exact_size(tab_h + inset)
         .resizable(false)
         .show_separator_line(false)
         .frame(Frame::new().fill(pal.surface))
@@ -79,24 +114,27 @@ pub fn tab_bar(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
             for (index, (icon, label, tab)) in TABS.iter().enumerate() {
                 let cell = Rect::from_min_size(
                     egui::pos2(rect.min.x + index as f32 * cell_w, rect.min.y),
-                    Vec2::new(cell_w, TAB_H),
+                    Vec2::new(cell_w, tab_h),
                 );
                 let response = ui.interact(cell, ui.scope_id().with(("phone-tab", index)), Sense::click());
                 let selected = current == *tab;
                 let color = if selected { accent } else { pal.muted };
+                let icon_y = if icons_only { cell.center().y } else { cell.min.y + 21.0 };
                 icons::draw(
                     ui.painter(),
-                    Rect::from_center_size(egui::pos2(cell.center().x, cell.min.y + 21.0), Vec2::splat(24.0)),
+                    Rect::from_center_size(egui::pos2(cell.center().x, icon_y), Vec2::splat(if icons_only { 22.0 } else { 24.0 })),
                     *icon,
                     color,
                 );
-                ui.painter().text(
-                    egui::pos2(cell.center().x, cell.min.y + 44.0),
-                    egui::Align2::CENTER_CENTER,
-                    label,
-                    FontId::proportional(11.5),
-                    color,
-                );
+                if !icons_only {
+                    ui.painter().text(
+                        egui::pos2(cell.center().x, cell.min.y + 44.0),
+                        egui::Align2::CENTER_CENTER,
+                        label,
+                        FontId::proportional(11.5),
+                        color,
+                    );
+                }
                 if response.clicked() {
                     app.page = page_for(*tab);
                 }
@@ -108,8 +146,10 @@ pub fn mini_player(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
     let Some(track) = app.current.clone() else {
         return;
     };
+    let mini_h = mini_height(ui.max_rect().height());
+    let dense = mini_h < 56.0;
     egui::Panel::bottom("phone_mini")
-        .exact_size(MINI_H)
+        .exact_size(mini_h)
         .resizable(false)
         .show_separator_line(false)
         .frame(Frame::new().fill(pal.bg).inner_margin(Margin { left: 10, right: 10, top: 6, bottom: 6 }))
@@ -117,9 +157,10 @@ pub fn mini_player(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
             let card = ui.max_rect();
             ui.painter().rect_filled(card, CornerRadius::same(14), pal.raised);
             let open = ui.interact(card, ui.scope_id().with("phone-mini-open"), Sense::click());
+            let art_side = (card.height() - 12.0).clamp(28.0, 48.0);
             let art_rect = Rect::from_min_size(
-                egui::pos2(card.min.x + 8.0, card.center().y - 24.0),
-                Vec2::splat(48.0),
+                egui::pos2(card.min.x + 8.0, card.center().y - art_side / 2.0),
+                Vec2::splat(art_side),
             );
             let art = app.current_art();
             widgets::paint_cover(ui.painter(), art_rect, art.as_ref(), 10, accent, pal);
@@ -127,20 +168,22 @@ pub fn mini_player(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
             let play_rect = Rect::from_center_size(egui::pos2(card.max.x - 30.0, card.center().y), Vec2::splat(44.0));
             let heart_rect = Rect::from_center_size(egui::pos2(play_rect.min.x - 26.0, card.center().y), Vec2::splat(48.0));
             let text_rect = Rect::from_min_max(
-                egui::pos2(art_rect.max.x + 12.0, card.min.y + 8.0),
-                egui::pos2(heart_rect.min.x - 4.0, card.max.y - 12.0),
+                egui::pos2(art_rect.max.x + 12.0, card.min.y + if dense { 0.0 } else { 8.0 }),
+                egui::pos2(heart_rect.min.x - 4.0, card.max.y - if dense { 0.0 } else { 12.0 }),
             );
             let painter = ui.painter().with_clip_rect(text_rect);
             let title_font = FontId::proportional(14.5);
             let fitted = crate::miniplayer::fit_text(&track.title, text_rect.width(), |text| {
                 painter.layout_no_wrap(text.to_owned(), title_font.clone(), pal.text).size().x
             });
-            painter.text(egui::pos2(text_rect.min.x, text_rect.min.y + 8.0), egui::Align2::LEFT_CENTER, fitted, title_font, pal.text);
+            painter.text(egui::pos2(text_rect.min.x, if dense { text_rect.center().y } else { text_rect.min.y + 8.0 }), egui::Align2::LEFT_CENTER, fitted, title_font, pal.text);
             let artist_font = FontId::proportional(12.0);
             let artist = crate::miniplayer::fit_text(track.display_artist(), text_rect.width(), |text| {
                 painter.layout_no_wrap(text.to_owned(), artist_font.clone(), pal.muted).size().x
             });
-            painter.text(egui::pos2(text_rect.min.x, text_rect.min.y + 27.0), egui::Align2::LEFT_CENTER, artist, artist_font, pal.muted);
+            if !dense {
+                painter.text(egui::pos2(text_rect.min.x, text_rect.min.y + 27.0), egui::Align2::LEFT_CENTER, artist, artist_font, pal.muted);
+            }
 
             let liked = app.liked_current();
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(heart_rect));

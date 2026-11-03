@@ -29,18 +29,21 @@ pub fn root(app: &mut App, ui: &mut Ui) {
     let pal = theme::palette(app.settings.theme);
     let window_width = ui.max_rect().width();
     let lay = responsive::plan(window_width);
+    let short_desktop = !lay.phone_bar && ui.max_rect().height() < 420.0;
 
     app.tick();
     shortcuts(app, &ctx);
     drop_files(app, &ctx);
 
-    if lay.phone_bar && app.now_playing_open {
+    if (lay.phone_bar || short_desktop) && app.now_playing_open {
         widgets::set_loading(app.audio_state() == crate::player::AudioState::Loading);
         phone::now_playing(app, ui, accent, &pal);
         return;
     }
-    if lay.phone_bar {
-        phone::tab_bar(app, ui, accent, &pal);
+    if lay.phone_bar || short_desktop {
+        if lay.phone_bar {
+            phone::tab_bar(app, ui, accent, &pal);
+        }
         phone::mini_player(app, ui, accent, &pal);
     } else {
         player_bar(app, ui, lay.compact_bar, accent, &pal);
@@ -1464,9 +1467,10 @@ fn toast(ctx: &egui::Context, app: &mut App, accent: Color32, pal: &Palette) {
     let retryable = app.toast_action.is_some();
     let mut retry = false;
     egui::Area::new(app.toast_id)
-        .anchor(Align2::CENTER_BOTTOM, Vec2::new(0.0, -150.0))
+        .anchor(Align2::CENTER_BOTTOM, Vec2::new(0.0, -(ctx.content_rect().height() * 0.25).clamp(60.0, 150.0)))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
+            ui.set_max_width((ctx.content_rect().width() - 32.0).max(120.0));
             Frame::new()
                 .fill(pal.raised)
                 .corner_radius(CornerRadius::same(12))
@@ -1474,7 +1478,7 @@ fn toast(ctx: &egui::Context, app: &mut App, accent: Color32, pal: &Palette) {
                 .inner_margin(Margin::symmetric(16, 11))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(message).size(13.5).color(pal.text));
+                        ui.add(egui::Label::new(RichText::new(message).size(13.5).color(pal.text)).wrap());
                         if retryable
                             && crate::ui::widgets::pill_button(ui, "Retry", false, accent, pal)
                         {

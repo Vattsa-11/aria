@@ -108,6 +108,7 @@ pub struct App {
     pub window_width: f32,
     live_watcher: crate::live::Watcher,
     pub preview_width: Option<f32>,
+    pub preview_height: Option<f32>,
     pub layout_overflow: bool,
     features: std::collections::HashMap<u64, crate::pace::Features>,
     features_checked: std::collections::HashSet<u64>,
@@ -250,6 +251,7 @@ impl App {
             recent_errors: std::collections::VecDeque::new(),
             window_width: 0.0,
             live_watcher: crate::live::Watcher::default(),
+            preview_height: std::env::var("ARIA_PREVIEW_HEIGHT").ok().and_then(|value| value.parse::<f32>().ok()).filter(|height| (120.0..=4000.0).contains(height)),
             preview_width: std::env::var("ARIA_PREVIEW_WIDTH").ok().and_then(|value| value.parse::<f32>().ok()).filter(|width| (200.0..=4000.0).contains(width)),
             layout_overflow: false,
             features: std::collections::HashMap::new(),
@@ -2225,7 +2227,8 @@ impl App {
             "preview" => {
                 self.preview_width = number("width").filter(|width| (200.0..=4000.0).contains(width)).map(|width| width as f32);
                 ctx.request_repaint();
-                Ok(json!({ "preview_width": self.preview_width }))
+                self.preview_height = number("height").filter(|height| (120.0..=4000.0).contains(height)).map(|height| height as f32);
+                Ok(json!({ "preview_width": self.preview_width, "preview_height": self.preview_height }))
             }
             "mini_size" => match (number("width"), number("height")) {
                 (Some(width), Some(height)) if self.mini.open => {
@@ -3001,15 +3004,20 @@ impl eframe::App for App {
         }
         self.tick();
         self.ensure_media(frame);
-        match self.preview_width {
-            Some(width) => {
+        match (self.preview_width, self.preview_height) {
+            (None, None) => crate::ui::root(self, ui),
+            (width, height) => {
                 let mut rect = ui.max_rect();
-                rect.max.x = rect.min.x + width.min(rect.width());
+                if let Some(width) = width {
+                    rect.max.x = rect.min.x + width.min(rect.width());
+                }
+                if let Some(height) = height {
+                    rect.max.y = rect.min.y + height.min(rect.height());
+                }
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                 child.set_clip_rect(rect);
                 crate::ui::root(self, &mut child);
             }
-            None => crate::ui::root(self, ui),
         }
         let ctx = ui.ctx().clone();
         crate::miniplayer::show(self, &ctx);

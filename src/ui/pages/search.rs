@@ -187,14 +187,12 @@ pub fn search(app: &mut App, ui: &mut Ui) {
     let accent = accent(&app.settings);
     let pal = palette(app.settings.theme);
 
-    ui.add_space(10.0);
-    ui.label(
-        RichText::new("Search")
-            .size(28.0)
-            .color(pal.text)
-            .strong(),
-    );
-    ui.add_space(10.0);
+    let short = ui.available_height() < 380.0;
+    ui.add_space(if short { 4.0 } else { 10.0 });
+    if !short {
+        ui.label(RichText::new("Search").size(28.0).color(pal.text).strong());
+        ui.add_space(10.0);
+    }
 
     let search_id = egui::Id::unique("aria.search-input");
     if app.focus_search {
@@ -229,6 +227,7 @@ pub fn search(app: &mut App, ui: &mut Ui) {
     });
 
     ui.add_space(8.0);
+    if !short {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
         let sources: [(&str, Option<crate::provider::ProviderName>); 4] = [
@@ -248,6 +247,7 @@ pub fn search(app: &mut App, ui: &mut Ui) {
             app.set_search_source(provider);
         }
     });
+    }
 
     ui.add_space(4.0);
     if let Some((message, ready)) = app.ytdlp_status.clone() {
