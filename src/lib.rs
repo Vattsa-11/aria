@@ -3,6 +3,7 @@ mod cache;
 mod db;
 mod dialogs;
 mod downloads;
+mod embedded;
 mod net;
 mod equalizer;
 mod http;

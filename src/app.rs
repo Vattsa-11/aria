@@ -300,6 +300,7 @@ impl App {
             last_media_state: None,
             last_media_position: u64::MAX,
         };
+        crate::embedded::extract_if_missing();
         let _ = app.jobs.tx.send(Job::EnsureYtDlp);
         app.refresh_trending();
         app

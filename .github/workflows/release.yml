@@ -5,10 +5,10 @@ on:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
-      publish:
-        description: "Publish a GitHub release (needs the tag name below)"
+      windows_only:
+        description: "Trial run: build only the Windows files, publish nothing"
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: write
@@ -28,6 +28,7 @@ jobs:
             raw: aria-windows-x86_64.exe
             ytdlp_asset: yt-dlp.exe
             ytdlp_name: yt-dlp.exe
+            features: --features embed-ytdlp
           - os: ubuntu-latest
             label: linux-x86_64
             binary: target/release/aria
@@ -40,6 +41,7 @@ jobs:
             raw: aria-macos-aarch64
             ytdlp_asset: yt-dlp_macos
             ytdlp_name: yt-dlp
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.windows_only != true || matrix.os == 'windows-latest' }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -65,9 +67,6 @@ jobs:
           ARIA_DATA_DIR: ${{ runner.temp }}/aria-test-data
         run: cargo test
 
-      - name: Build
-        run: cargo build --release
-
       - name: Download and verify yt-dlp
         shell: bash
         run: |
@@ -79,6 +78,10 @@ jobs:
           test -n "$expected" || { echo "no checksum listed for ${{ matrix.ytdlp_asset }}"; exit 1; }
           test "$expected" = "$actual" || { echo "yt-dlp checksum mismatch: $expected vs $actual"; exit 1; }
           chmod +x ytdlp-download
+          if [ "$RUNNER_OS" = "Windows" ]; then mkdir -p bundled && cp ytdlp-download bundled/yt-dlp.exe; fi
+
+      - name: Build
+        run: cargo build --release ${{ matrix.features }}
 
       - name: Stage files
         shell: bash
@@ -134,51 +137,8 @@ jobs:
           name: aria-${{ matrix.label }}
           path: dist/*
 
-  android:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-      - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-apk
-        run: cargo install cargo-apk --locked
-      - name: Prepare signing key
-        shell: bash
-        env:
-          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-        run: |
-          store="$RUNNER_TEMP/aria.keystore"
-          if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > "$store"
-            password="$KEYSTORE_PASSWORD"
-          else
-            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret: signing with a temporary key. Updates will not install over earlier builds."
-            password="aria-temporary-key"
-            keytool -genkeypair -keystore "$store" -alias aria -keyalg RSA -keysize 2048 -validity 10000 \
-              -storepass "$password" -keypass "$password" -dname "CN=Aria,O=Aria,C=IN"
-          fi
-          echo "CARGO_APK_RELEASE_KEYSTORE=$store" >> "$GITHUB_ENV"
-          echo "CARGO_APK_RELEASE_KEYSTORE_PASSWORD=$password" >> "$GITHUB_ENV"
-      - name: Build APK
-        run: |
-          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
-          export ANDROID_NDK_ROOT="$ANDROID_NDK_LATEST_HOME"
-          cargo apk build --release --lib
-      - name: Stage APK
-        run: |
-          mkdir dist
-          cp target/release/apk/aria.apk dist/aria-android-arm64.apk
-          cd dist && sha256sum aria-android-arm64.apk > aria-android-arm64.apk.sha256
-      - uses: actions/upload-artifact@v4
-        with:
-          name: aria-android-arm64
-          path: dist/*
-
   publish:
-    needs: [build, android]
+    needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
