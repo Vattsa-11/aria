@@ -113,6 +113,7 @@ jobs:
             -d "YtdlpPath=$(pwd)/bundle/yt-dlp.exe" \
             -d "IconPath=$(pwd)/assets/icon.ico" \
             -o dist/aria-windows-x86_64.msi
+          rm -f dist/*.wixpdb
 
       - name: Debian package
         if: runner.os == 'Linux'
