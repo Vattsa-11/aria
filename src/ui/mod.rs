@@ -1133,7 +1133,7 @@ fn lyrics_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, widt
                 return;
             }
 
-            let scroll = egui::ScrollArea::vertical().auto_shrink([false, false]);
+            let scroll = egui::ScrollArea::vertical().auto_shrink([false, false]).scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, ..Default::default() });
             scroll.show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 8.0;
                 for (index, line) in app.lyrics_lines.iter().enumerate() {
@@ -1195,6 +1195,10 @@ fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width
                 });
             });
             ui.add_space(10.0);
+            ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, ..Default::default() })
+                .show(ui, |ui| {
             widgets::section_label(ui, "Now playing", pal);
             ui.add_space(6.0);
             match &app.current {
@@ -1236,9 +1240,7 @@ fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width
                 let mut remove: Option<usize> = None;
                 let mut moved: Option<(usize, usize)> = None;
                 let mut menu_requests: Vec<(egui::Response, crate::model::Track)> = Vec::new();
-                ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
+                ui.scope(|ui| {
                         for (index, track) in queued.iter().enumerate() {
                             let art = app.thumb(track);
                             let resp = track_row(
@@ -1298,9 +1300,7 @@ fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width
                 ui.label(RichText::new("Nothing queued").size(13.0).color(pal.muted));
             } else {
                 let mut jump = None;
-                ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
+                ui.scope(|ui| {
                         for (index, track) in preview {
                             let (rect, response) = ui.allocate_exact_size(
                                 Vec2::new(ui.available_width(), 52.0),
@@ -1341,6 +1341,7 @@ fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width
                     app.jump_queue_context(index);
                 }
             }
+            });
         });
     if !open {
         app.queue_open = false;

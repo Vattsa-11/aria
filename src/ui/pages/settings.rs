@@ -13,6 +13,7 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
+        .scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, ..Default::default() })
         .show(ui, |ui| {
             ui.add_space(10.0);
             ui.label(

@@ -157,6 +157,7 @@ pub fn import(app: &mut App, ui: &mut egui::Ui) {
     let mut actions: Vec<(usize, RowHit)> = Vec::new();
     ScrollArea::vertical()
         .auto_shrink([false, false])
+        .scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, ..Default::default() })
         .max_height((ui.available_height() - 132.0).max(140.0))
         .show(ui, |ui| {
             for (index, entry) in app.import.entries.iter().enumerate() {
