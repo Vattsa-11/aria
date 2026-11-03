@@ -132,6 +132,43 @@ pub fn menu_items(view: &MenuView) -> Vec<MenuItem> {
     items
 }
 
+fn menu_body(
+    ui: &mut egui::Ui,
+    confirm_id: egui::Id,
+    view: &MenuView,
+    playlists: &[(usize, String)],
+    pal: &Palette,
+    actions: &mut Vec<TrackMenuAction>,
+) {
+    ui.set_min_width(220.0);
+    for item in menu_items(view) {
+        if item == MenuItem::DeleteDownload {
+            let pending = ui.data(|data| data.get_temp::<bool>(confirm_id)).unwrap_or(false);
+            let label = if pending { "Tap again to delete" } else { item.label() };
+            if menu_button(ui, label, pal) {
+                if pending {
+                    ui.data_mut(|data| data.insert_temp(confirm_id, false));
+                    actions.push(item.action());
+                } else {
+                    ui.data_mut(|data| data.insert_temp(confirm_id, true));
+                }
+            }
+        } else if menu_button(ui, item.label(), pal) {
+            actions.push(item.action());
+        }
+    }
+    ui.separator();
+    ui.label(egui::RichText::new("Add to playlist").size(12.0).color(pal.muted));
+    if menu_button(ui, "New playlist with this song", pal) {
+        actions.push(TrackMenuAction::NewPlaylist);
+    }
+    for (idx, name) in playlists {
+        if menu_button(ui, name, pal) {
+            actions.push(TrackMenuAction::AddToPlaylist(*idx));
+        }
+    }
+}
+
 pub fn show_track_menu(
     resp: &egui::Response,
     view: &MenuView,
@@ -148,36 +185,46 @@ pub fn show_track_menu(
     if at_pointer {
         popup = popup.anchor(egui::PopupAnchor::PointerFixed);
     }
-    popup.show(|ui| {
-        ui.set_min_width(220.0);
-        for item in menu_items(view) {
-            if item == MenuItem::DeleteDownload {
-                let pending = ui.data(|data| data.get_temp::<bool>(confirm_id)).unwrap_or(false);
-                let label = if pending { "Tap again to delete" } else { item.label() };
-                if menu_button(ui, label, pal) {
-                    if pending {
-                        ui.data_mut(|data| data.insert_temp(confirm_id, false));
-                        actions.push(item.action());
-                    } else {
-                        ui.data_mut(|data| data.insert_temp(confirm_id, true));
-                    }
-                }
-            } else if menu_button(ui, item.label(), pal) {
-                actions.push(item.action());
-            }
-        }
-        ui.separator();
-        ui.label(egui::RichText::new("Add to playlist").size(12.0).color(pal.muted));
-        if menu_button(ui, "New playlist with this song", pal) {
-            actions.push(TrackMenuAction::NewPlaylist);
-        }
-        for (idx, name) in playlists {
-            if menu_button(ui, name, pal) {
-                actions.push(TrackMenuAction::AddToPlaylist(*idx));
-            }
-        }
-    });
+    popup.show(|ui| menu_body(ui, confirm_id, view, playlists, pal, &mut actions));
     actions
+}
+
+fn menu_view_for(app: &crate::app::App, track: &Track) -> MenuView {
+    MenuView {
+        liked: app.is_liked(track.id),
+        is_online: track.is_online(),
+        downloaded: app.is_downloaded(track.id),
+        downloading: app.is_downloading(track.id),
+        heart_visible: true,
+        show_play: true,
+        has_artist: !track.artist.trim().is_empty(),
+        has_link: track.watch_url().is_some(),
+    }
+}
+
+fn playlist_choices(app: &crate::app::App) -> Vec<(usize, String)> {
+    app.playlists
+        .iter()
+        .enumerate()
+        .map(|(index, playlist)| (index, playlist.name.clone()))
+        .collect()
+}
+
+pub fn track_context_menu(
+    app: &mut crate::app::App,
+    response: &egui::Response,
+    track: &Track,
+    pal: &Palette,
+) {
+    let view = menu_view_for(app, track);
+    let playlists = playlist_choices(app);
+    let confirm_id = response.id.with("delete-confirm");
+    let mut actions = Vec::new();
+    egui::Popup::context_menu(response)
+        .show(|ui| menu_body(ui, confirm_id, &view, &playlists, pal, &mut actions));
+    for action in actions {
+        app.track_menu_for(track, action);
+    }
 }
 
 pub fn open_menu_on_right_click(ctx: &egui::Context, row: &egui::Response, menu: &egui::Response) {
@@ -199,23 +246,9 @@ pub fn row_menus(
     if rows.is_empty() {
         return;
     }
-    let playlists: Vec<(usize, String)> = app
-        .playlists
-        .iter()
-        .enumerate()
-        .map(|(index, playlist)| (index, playlist.name.clone()))
-        .collect();
+    let playlists = playlist_choices(app);
     for (response, track) in rows {
-        let view = MenuView {
-            liked: app.is_liked(track.id),
-            is_online: track.is_online(),
-            downloaded: app.is_downloaded(track.id),
-            downloading: app.is_downloading(track.id),
-            heart_visible: true,
-            show_play: true,
-            has_artist: !track.artist.trim().is_empty(),
-            has_link: track.watch_url().is_some(),
-        };
+        let view = menu_view_for(app, &track);
         for action in show_track_menu(&response, &view, &playlists, pal) {
             app.track_menu_for(&track, action);
         }

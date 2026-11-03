@@ -105,7 +105,9 @@ pub fn home(app: &mut App, ui: &mut egui::Ui) {
                 ui.horizontal_wrapped(|ui| {
                     for (track, source) in picks {
                         let art = app.thumb(&track);
-                        if pick_card(ui, &track, art.as_ref(), &pal, accent) {
+                        let (clicked, card_response) = pick_card(ui, &track, art.as_ref(), &pal, accent);
+                        crate::ui::pages::rows::track_context_menu(app, &card_response, &track, &pal);
+                        if clicked {
                             match source {
                                 PickSource::Library(index) => actions.push(Action::PlayLibrary(index)),
                                 PickSource::Liked(index) => actions.push(Action::PlayPick(PickSource::Liked(index))),
@@ -452,6 +454,7 @@ fn track_strip(
                 egui::FontId::proportional(11.0),
                 pal.muted,
             );
+            crate::ui::pages::rows::track_context_menu(app, &response, track, pal);
             if response.clicked() {
                 actions.push(play(index));
             }
@@ -496,7 +499,7 @@ fn card(
     response.clicked()
 }
 
-fn pick_card(ui: &mut egui::Ui, track: &Track, art: Option<&egui::TextureHandle>, pal: &Palette, accent: Color32) -> bool {
+fn pick_card(ui: &mut egui::Ui, track: &Track, art: Option<&egui::TextureHandle>, pal: &Palette, accent: Color32) -> (bool, egui::Response) {
     let width = ((ui.available_width() - 12.0) * 0.5).clamp(220.0, 460.0);
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 60.0), Sense::click());
     if response.hovered() {
@@ -527,7 +530,7 @@ fn pick_card(ui: &mut egui::Ui, track: &Track, art: Option<&egui::TextureHandle>
         egui::FontId::proportional(11.0),
         pal.muted,
     );
-    response.clicked()
+    (response.clicked(), response)
 }
 
 fn paint_art(
