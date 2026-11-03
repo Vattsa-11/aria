@@ -98,13 +98,15 @@ pub struct App {
     download_cancels: Vec<(u64, Arc<std::sync::atomic::AtomicBool>)>,
 
     pub delete_all: Option<(u8, usize, u64)>,
-    warm: Option<Warmed>,
+    warm: std::collections::HashMap<u64, Warmed>,
+    manual_fade: bool,
     pub trending: Vec<Track>,
     pub agent: Option<crate::agent::AgentHandle>,
     pub agent_error: Option<String>,
     pub agent_findings: Vec<crate::doctor::Finding>,
     recent_errors: std::collections::VecDeque<String>,
     pub window_width: f32,
+    live_watcher: crate::live::Watcher,
     pub preview_width: Option<f32>,
     pub layout_overflow: bool,
     features: std::collections::HashMap<u64, crate::pace::Features>,
@@ -115,7 +117,7 @@ pub struct App {
     pub trending_loading: bool,
     pub trending_error: Option<String>,
     pub geo_loading: bool,
-    warm_requested: Option<u64>,
+    warm_requested: std::collections::HashSet<u64>,
     pub download_progress: std::collections::HashMap<u64, (u64, Option<u64>)>,
 
     pub online: bool,
@@ -239,13 +241,15 @@ impl App {
             downloading: Vec::new(),
             download_cancels: Vec::new(),
             delete_all: None,
-            warm: None,
+            warm: std::collections::HashMap::new(),
+            manual_fade: false,
             trending: Vec::new(),
             agent: None,
             agent_error: None,
             agent_findings: Vec::new(),
             recent_errors: std::collections::VecDeque::new(),
             window_width: 0.0,
+            live_watcher: crate::live::Watcher::default(),
             preview_width: std::env::var("ARIA_PREVIEW_WIDTH").ok().and_then(|value| value.parse::<f32>().ok()).filter(|width| (200.0..=4000.0).contains(width)),
             layout_overflow: false,
             features: std::collections::HashMap::new(),
@@ -256,7 +260,7 @@ impl App {
             trending_loading: false,
             trending_error: None,
             geo_loading: false,
-            warm_requested: None,
+            warm_requested: std::collections::HashSet::new(),
             download_progress: std::collections::HashMap::new(),
             online: true,
             probe_busy: false,
@@ -443,8 +447,9 @@ impl App {
     }
 
     pub fn start_track(&mut self, track: Track, origin: TrackOrigin, start: Duration) {
+        let manual = std::mem::take(&mut self.manual_fade);
         let fade = if std::mem::take(&mut self.crossfade_arm) {
-            Duration::from_secs_f32(self.settings.crossfade.clamp(0.0, 12.0))
+            Duration::from_secs_f32(transition_secs(self.settings.crossfade, manual))
         } else {
             Duration::ZERO
         };
@@ -553,6 +558,10 @@ impl App {
     }
 
     pub fn play_advance(&mut self, automatic: bool) {
+        if !automatic && self.settings.crossfade > 0.05 && self.audio_state() == AudioState::Playing {
+            self.crossfade_arm = true;
+            self.manual_fade = true;
+        }
         match self.queue.advance(automatic) {
             Advance::RepeatCurrent => {
                 if let Some(track) = self.current.clone() {
@@ -1538,12 +1547,22 @@ impl App {
     }
 
     fn take_warm(&mut self, track_id: u64) -> Option<Warmed> {
-        let warmed = self.warm.take()?;
+        let warmed = self.warm.remove(&track_id)?;
         if warm_is_usable(warmed.track_id, track_id, warmed.at.elapsed()) {
+            warmed.http.resume_fill();
             Some(warmed)
         } else {
             None
         }
+    }
+
+    fn upcoming_tracks(&self, count: usize) -> Vec<Track> {
+        let mut upcoming: Vec<Track> = self.queue.user.iter().take(count).cloned().collect();
+        if upcoming.len() < count {
+            let need = count - upcoming.len();
+            upcoming.extend(self.queue.context_preview().into_iter().take(need).map(|(_, track)| track.clone()));
+        }
+        upcoming
     }
 
     fn next_preview(&self) -> Option<Track> {
@@ -1554,22 +1573,34 @@ impl App {
             .or_else(|| self.queue.context_preview().into_iter().next().map(|(_, track)| track.clone()))
     }
 
+    fn next_is_ready(&mut self) -> bool {
+        match self.next_preview() {
+            None => true,
+            Some(next) => {
+                !next.is_online()
+                    || self.download_path(next.id).is_some()
+                    || self.warm.contains_key(&next.id)
+            }
+        }
+    }
+
     fn maybe_warm_next(&mut self) {
-        if self.audio_state() != AudioState::Playing || self.is_offline() {
+        if self.audio_state() != AudioState::Playing || self.is_offline() || self.position() < WARM_AFTER_SECS {
             return;
         }
-        let Some(next) = self.next_preview() else {
-            return;
-        };
-        let already = self.warm.as_ref().is_some_and(|warmed| warmed.track_id == next.id)
-            || self.warm_requested == Some(next.id);
-        let local = !next.is_online() || self.download_path(next.id).is_some();
-        let is_current = self.current.as_ref().is_some_and(|track| track.id == next.id);
-        if !should_warm(self.position(), local, already, is_current) {
-            return;
+        self.warm.retain(|_, warmed| warmed.at.elapsed() < WARM_MAX_AGE);
+        let current = self.current.as_ref().map(|track| track.id);
+        let upcoming = self.upcoming_tracks(WARM_AHEAD);
+        let candidates: Vec<(u64, bool)> = upcoming
+            .iter()
+            .map(|track| (track.id, !track.is_online() || self.download_path(track.id).is_some()))
+            .collect();
+        let warmed: std::collections::HashSet<u64> = self.warm.keys().copied().collect();
+        for index in warm_targets(&candidates, &warmed, &self.warm_requested, current, WARM_IN_FLIGHT) {
+            let track = upcoming[index].clone();
+            self.warm_requested.insert(track.id);
+            let _ = self.jobs.tx.send(Job::Warm { track });
         }
-        self.warm_requested = Some(next.id);
-        let _ = self.jobs.tx.send(Job::Warm { track: next });
     }
 
     pub fn prefetch_playback_art(&mut self) {
@@ -1665,7 +1696,7 @@ impl App {
         if !track.is_online() || self.is_offline() || self.download_path(track.id).is_some() {
             return;
         }
-        self.warm_requested = Some(track.id);
+        self.warm_requested.insert(track.id);
         let _ = self.jobs.tx.send(Job::Warm { track });
     }
 
@@ -1928,6 +1959,268 @@ impl App {
                     "findings": self.agent_findings.iter().map(|finding| finding.to_json()).collect::<Vec<_>>(),
                     "report": crate::agent::agent_dir().join("doctor-report.md").display().to_string(),
                 }))
+            }
+            "commands" => Ok(json!([
+                "ping", "state", "commands", "play", "pause", "toggle", "next", "prev", "seek", "volume", "like", "shuffle", "repeat",
+                "navigate", "panel", "search", "results", "play_result", "queue", "queue_add", "queue_remove", "queue_clear",
+                "playlists", "playlist", "playlist_create", "playlist_add", "playlist_play", "playlist_delete",
+                "list", "play_list", "download", "download_cancel", "download_delete", "lyrics", "lyrics_refresh",
+                "import_url", "region", "sleep", "mood", "settings", "set_setting", "window", "preview", "mini_size",
+                "logs", "diagnose", "screenshot"
+            ])),
+            "shuffle" => {
+                self.toggle_shuffle();
+                Ok(json!({ "shuffle": self.settings.shuffle }))
+            }
+            "repeat" => {
+                self.cycle_repeat();
+                Ok(json!({ "repeat": format!("{:?}", self.settings.repeat).to_lowercase() }))
+            }
+            "settings" => serde_json::to_value(&self.settings).map_err(|error| error.to_string()),
+            "set_setting" => {
+                let key = text("key").unwrap_or_default();
+                let value = args.get("value").cloned().unwrap_or(serde_json::Value::Null);
+                let flag = value.as_bool();
+                let amount = value.as_f64();
+                let outcome: Result<(), String> = match (key.as_str(), flag, amount) {
+                    ("volume", _, Some(v)) => {
+                        self.set_volume(v as f32);
+                        Ok(())
+                    }
+                    ("crossfade", _, Some(v)) => {
+                        self.settings.crossfade = (v as f32).clamp(0.0, 12.0);
+                        Ok(())
+                    }
+                    ("autoplay", Some(v), _) => {
+                        self.settings.autoplay = v;
+                        Ok(())
+                    }
+                    ("normalize", Some(v), _) => {
+                        self.settings.normalize = v;
+                        self.normalize.store(v, std::sync::atomic::Ordering::Relaxed);
+                        Ok(())
+                    }
+                    ("battery_saver", Some(v), _) => {
+                        self.settings.battery_saver = v;
+                        Ok(())
+                    }
+                    ("offline_mode", Some(v), _) => {
+                        self.settings.offline_mode = v;
+                        Ok(())
+                    }
+                    ("mini_opacity", _, Some(v)) => {
+                        self.settings.mini_opacity = (v as f32).clamp(crate::miniplayer::MIN_OPACITY, 1.0);
+                        Ok(())
+                    }
+                    ("mini_auto_fade", Some(v), _) => {
+                        self.settings.mini_auto_fade = v;
+                        Ok(())
+                    }
+                    ("theme", _, _) => match value.as_str() {
+                        Some("dark") => {
+                            self.settings.theme = crate::settings::ThemeVariant::Dark;
+                            Ok(())
+                        }
+                        Some("amoled") => {
+                            self.settings.theme = crate::settings::ThemeVariant::Amoled;
+                            Ok(())
+                        }
+                        _ => Err("theme must be \"dark\" or \"amoled\"".to_string()),
+                    },
+                    _ => Err("set_setting keys: volume, crossfade, autoplay, normalize, battery_saver, offline_mode, mini_opacity, mini_auto_fade, theme (with a value of the right type)".to_string()),
+                };
+                outcome.map(|()| {
+                    self.touch_settings();
+                    json!({ "ok": true })
+                })
+            }
+            "queue" => Ok(json!({
+                "user": self.queue.user.iter().map(|track| json!({ "id": track.id, "title": track.title, "artist": track.artist })).collect::<Vec<_>>(),
+                "context_name": self.queue.context_name,
+                "context_next": self.queue.context_preview().into_iter().take(30).map(|(_, track)| json!({ "id": track.id, "title": track.title, "artist": track.artist })).collect::<Vec<_>>(),
+            })),
+            "queue_add" => match number("index").and_then(|index| self.search.results.get(index as usize).cloned()) {
+                Some(track) => {
+                    self.add_to_queue(track);
+                    Ok(json!({ "queue_user": self.queue.user_len() }))
+                }
+                None => Err("queue_add needs args.index of an existing search result".to_string()),
+            },
+            "queue_remove" => match number("index") {
+                Some(index) if (index as usize) < self.queue.user_len() => {
+                    self.queue.remove_user(index as usize);
+                    self.persist(true);
+                    Ok(json!({ "queue_user": self.queue.user_len() }))
+                }
+                _ => Err("queue_remove needs args.index inside the user queue".to_string()),
+            },
+            "queue_clear" => {
+                self.queue.user.clear();
+                self.persist(true);
+                Ok(json!({ "queue_user": 0 }))
+            }
+            "playlists" => Ok(json!(self
+                .playlists
+                .iter()
+                .enumerate()
+                .map(|(index, playlist)| json!({ "index": index, "name": playlist.name, "tracks": playlist.tracks.len() }))
+                .collect::<Vec<_>>())),
+            "playlist" => match number("index").and_then(|index| self.playlists.get(index as usize)) {
+                Some(playlist) => Ok(json!({
+                    "name": playlist.name,
+                    "tracks": playlist.tracks.iter().take(200).enumerate().map(|(index, track)| json!({ "index": index, "title": track.title, "artist": track.artist })).collect::<Vec<_>>(),
+                })),
+                None => Err("playlist needs args.index of an existing playlist".to_string()),
+            },
+            "playlist_create" => match text("name") {
+                Some(name) if !name.trim().is_empty() => {
+                    self.create_playlist(&name);
+                    Ok(json!({ "playlists": self.playlists.len() }))
+                }
+                _ => Err("playlist_create needs args.name".to_string()),
+            },
+            "playlist_add" => match (number("playlist"), number("result_index")) {
+                (Some(playlist), Some(result)) if (playlist as usize) < self.playlists.len() => match self.search.results.get(result as usize).cloned() {
+                    Some(track) => {
+                        self.add_to_playlist(playlist as usize, track);
+                        Ok(json!({ "ok": true }))
+                    }
+                    None => Err("result_index is not an existing search result".to_string()),
+                },
+                _ => Err("playlist_add needs args.playlist (index) and args.result_index".to_string()),
+            },
+            "playlist_play" => match number("index") {
+                Some(index) if (index as usize) < self.playlists.len() => {
+                    self.play_playlist(index as usize, number("track").unwrap_or(0.0) as usize);
+                    Ok(json!({ "ok": true }))
+                }
+                _ => Err("playlist_play needs args.index of an existing playlist".to_string()),
+            },
+            "playlist_delete" => match number("index") {
+                Some(index) if (index as usize) < self.playlists.len() => {
+                    self.delete_playlist(index as usize);
+                    Ok(json!({ "playlists": self.playlists.len() }))
+                }
+                _ => Err("playlist_delete needs args.index of an existing playlist".to_string()),
+            },
+            "list" => {
+                let tracks: Option<&Vec<crate::model::Track>> = match text("name").as_deref() {
+                    Some("liked") => Some(&self.liked),
+                    Some("history") => Some(&self.history),
+                    Some("downloads") => Some(&self.downloads),
+                    Some("library") => Some(&self.tracks),
+                    Some("trending") => Some(&self.trending),
+                    _ => None,
+                };
+                match tracks {
+                    Some(tracks) => Ok(json!(tracks
+                        .iter()
+                        .take(100)
+                        .enumerate()
+                        .map(|(index, track)| json!({ "index": index, "id": track.id, "title": track.title, "artist": track.artist }))
+                        .collect::<Vec<_>>())),
+                    None => Err("list needs args.name: liked, history, downloads, library or trending".to_string()),
+                }
+            }
+            "play_list" => match (text("name").as_deref(), number("index")) {
+                (Some(name), Some(index)) => {
+                    let index = index as usize;
+                    let size = match name {
+                        "liked" => self.liked.len(),
+                        "history" => self.history.len(),
+                        "downloads" => self.downloads.len(),
+                        "library" => self.tracks.len(),
+                        "trending" => self.trending.len(),
+                        _ => 0,
+                    };
+                    if index >= size {
+                        Err("index is outside that list".to_string())
+                    } else {
+                        match name {
+                            "liked" => self.play_liked(index),
+                            "history" => self.play_history(index),
+                            "downloads" => self.play_downloads(index),
+                            "library" => self.play_library(index),
+                            _ => self.play_trending(index),
+                        }
+                        Ok(json!({ "ok": true }))
+                    }
+                }
+                _ => Err("play_list needs args.name and args.index".to_string()),
+            },
+            "download" => match number("index").and_then(|index| self.search.results.get(index as usize).cloned()) {
+                Some(track) => {
+                    self.start_download(track);
+                    Ok(json!({ "downloading": self.downloading.len() }))
+                }
+                None => Err("download needs args.index of an existing search result".to_string()),
+            },
+            "download_cancel" => match number("id") {
+                Some(id) => {
+                    self.cancel_download(id as u64);
+                    Ok(json!({ "ok": true }))
+                }
+                None => Err("download_cancel needs args.id (see state or list downloads)".to_string()),
+            },
+            "download_delete" => match number("id") {
+                Some(id) => {
+                    self.remove_download(id as u64);
+                    Ok(json!({ "ok": true }))
+                }
+                None => Err("download_delete needs args.id".to_string()),
+            },
+            "lyrics" => Ok(json!({
+                "loading": self.lyrics_loading,
+                "error": self.lyrics_error,
+                "lines": self.lyrics_lines.iter().take(300).map(|line| json!({ "at": line.at, "text": line.text })).collect::<Vec<_>>(),
+            })),
+            "lyrics_refresh" => {
+                self.lyrics_track = None;
+                self.refresh_lyrics();
+                Ok(json!({ "started": true }))
+            }
+            "import_url" => match text("url") {
+                Some(url) if !url.trim().is_empty() => {
+                    self.import.url = url;
+                    self.page = Page::Import;
+                    self.import_url();
+                    Ok(json!({ "started": true }))
+                }
+                _ => Err("import_url needs args.url".to_string()),
+            },
+            "region" => match (text("mode").as_deref(), text("language")) {
+                (_, Some(language)) => {
+                    self.choose_region_language(&language);
+                    Ok(json!({ "language": self.settings.region_language }))
+                }
+                (Some("off"), _) => {
+                    self.set_region_mode(RegionMode::Off);
+                    Ok(json!({ "mode": "off" }))
+                }
+                (Some("auto"), _) => {
+                    self.set_region_mode(RegionMode::Auto);
+                    Ok(json!({ "mode": "auto" }))
+                }
+                _ => Err("region needs args.mode (off or auto) or args.language (for example tamil)".to_string()),
+            },
+            "sleep" => {
+                if let Some(minutes) = number("minutes") {
+                    self.sleep.arm_minutes(minutes.max(1.0) as u32);
+                } else if args.get("end_of_track").and_then(|value| value.as_bool()) == Some(true) {
+                    self.sleep.arm_end_of_track();
+                } else {
+                    self.sleep.clear();
+                }
+                Ok(json!({ "active": self.sleep.active(), "label": self.sleep.label() }))
+            }
+            "live" => {
+                let file = crate::live::path();
+                match args.get("overrides") {
+                    Some(overrides) => crate::live::parse(&overrides.to_string()).and_then(|_| {
+                        std::fs::write(&file, serde_json::to_string_pretty(overrides).unwrap_or_default()).map_err(|error| error.to_string())
+                    }).map(|()| json!({ "written": file.display().to_string() })),
+                    None => std::fs::write(&file, crate::live::TEMPLATE).map(|()| json!({ "template": file.display().to_string() })).map_err(|error| error.to_string()),
+                }
             }
             "preview" => {
                 self.preview_width = number("width").filter(|width| (200.0..=4000.0).contains(width)).map(|width| width as f32);
@@ -2205,6 +2498,9 @@ impl App {
         if !self.queue.has_following(true) {
             return;
         }
+        if remaining > 1.0 && !self.next_is_ready() {
+            return;
+        }
         self.crossfade_armed = Some(track.id);
         self.crossfade_arm = true;
         self.play_advance(true);
@@ -2220,6 +2516,11 @@ impl App {
                 if self.lyrics_track != Some(track.id) {
                     self.refresh_lyrics();
                 }
+            }
+        }
+        if self.live_watcher.poll() {
+            if let Some(ctx) = &self.ctx {
+                ctx.request_repaint();
             }
         }
         self.poll();
@@ -2299,11 +2600,18 @@ impl App {
                     }
                 }
                 Event::Warmed { track_id, warmed } => {
-                    if self.warm_requested == Some(track_id) {
-                        self.warm_requested = None;
-                    }
+                    self.warm_requested.remove(&track_id);
                     if let Some((stream, http)) = warmed {
-                        self.warm = Some(Warmed { track_id, stream, http, at: Instant::now() });
+                        self.warm.insert(track_id, Warmed { track_id, stream, http, at: Instant::now() });
+                        while self.warm.len() > WARM_KEEP {
+                            let oldest = self.warm.iter().min_by_key(|(_, warmed)| warmed.at).map(|(id, _)| *id);
+                            match oldest {
+                                Some(id) => {
+                                    self.warm.remove(&id);
+                                }
+                                None => break,
+                            }
+                        }
                     }
                 }
                 Event::Resolved { gen, mut track, result } => {
@@ -2627,6 +2935,9 @@ pub struct Warmed {
 
 const WARM_MAX_AGE: Duration = Duration::from_secs(15 * 60);
 const WARM_AFTER_SECS: f64 = 5.0;
+const WARM_AHEAD: usize = 6;
+const WARM_KEEP: usize = 6;
+const WARM_IN_FLIGHT: usize = 2;
 
 pub fn resume_position_ms(idle_with_track: bool, pending: Option<u64>, snapshot_ms: u64) -> u64 {
     match (idle_with_track, pending) {
@@ -2639,8 +2950,36 @@ pub fn warm_is_usable(warmed_id: u64, wanted_id: u64, age: Duration) -> bool {
     warmed_id == wanted_id && age < WARM_MAX_AGE
 }
 
-pub fn should_warm(position_secs: f64, local: bool, already: bool, is_current: bool) -> bool {
-    !local && !already && !is_current && position_secs >= WARM_AFTER_SECS
+pub fn warm_targets(
+    upcoming: &[(u64, bool)],
+    warmed: &std::collections::HashSet<u64>,
+    requested: &std::collections::HashSet<u64>,
+    current: Option<u64>,
+    in_flight_limit: usize,
+) -> Vec<usize> {
+    let mut budget = in_flight_limit.saturating_sub(requested.len());
+    let mut picks = Vec::new();
+    for (index, (id, local)) in upcoming.iter().enumerate() {
+        if budget == 0 {
+            break;
+        }
+        if *local || Some(*id) == current || warmed.contains(id) || requested.contains(id) {
+            continue;
+        }
+        picks.push(index);
+        budget -= 1;
+    }
+    picks
+}
+
+pub fn transition_secs(setting: f32, manual: bool) -> f32 {
+    if setting <= 0.05 {
+        0.0
+    } else if manual {
+        setting.min(1.2)
+    } else {
+        setting.clamp(0.0, 12.0)
+    }
 }
 
 pub fn effective_state(audio: AudioState, resolving: bool) -> AudioState {
@@ -2691,7 +3030,7 @@ impl eframe::App for App {
 
 #[cfg(test)]
 mod state_tests {
-    use super::{effective_state, resume_position_ms, should_warm, warm_is_usable};
+    use super::{effective_state, resume_position_ms, transition_secs, warm_is_usable, warm_targets};
     use std::time::Duration;
     use crate::player::AudioState;
 
@@ -2704,12 +3043,29 @@ mod state_tests {
     }
 
     #[test]
-    fn next_track_is_warmed_only_when_useful() {
-        assert!(should_warm(6.0, false, false, false));
-        assert!(!should_warm(2.0, false, false, false));
-        assert!(!should_warm(30.0, true, false, false));
-        assert!(!should_warm(30.0, false, true, false));
-        assert!(!should_warm(30.0, false, false, true));
+    fn several_upcoming_songs_are_warmed_nearest_first_without_flooding() {
+        use std::collections::HashSet;
+        let upcoming = vec![(1, false), (2, true), (3, false), (4, false), (5, false)];
+        let none = HashSet::new();
+        assert_eq!(warm_targets(&upcoming, &none, &none, None, 2), vec![0, 2]);
+        let warmed: HashSet<u64> = [1].into_iter().collect();
+        assert_eq!(warm_targets(&upcoming, &warmed, &none, None, 2), vec![2, 3]);
+        let busy: HashSet<u64> = [3].into_iter().collect();
+        assert_eq!(warm_targets(&upcoming, &warmed, &busy, None, 2), vec![3]);
+        let full: HashSet<u64> = [3, 4].into_iter().collect();
+        assert!(warm_targets(&upcoming, &none, &full, None, 2).is_empty());
+        assert!(warm_targets(&upcoming, &none, &none, Some(1), 1) == vec![2]);
+        assert!(warm_targets(&[], &none, &none, None, 2).is_empty());
+    }
+
+    #[test]
+    fn manual_skips_get_a_short_fade_and_automatic_ones_the_full_setting() {
+        assert_eq!(transition_secs(0.0, false), 0.0);
+        assert_eq!(transition_secs(0.0, true), 0.0);
+        assert_eq!(transition_secs(4.0, false), 4.0);
+        assert_eq!(transition_secs(4.0, true), 1.2);
+        assert_eq!(transition_secs(0.8, true), 0.8);
+        assert_eq!(transition_secs(30.0, false), 12.0);
     }
 
     #[test]

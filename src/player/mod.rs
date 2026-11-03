@@ -287,7 +287,7 @@ fn run(
         if let Some((index, started, len)) = fade_out {
             let progress = (started.elapsed().as_secs_f32() / len.as_secs_f32().max(0.001))
                 .clamp(0.0, 1.0);
-            sinks[index].set_volume(volume * (1.0 - progress));
+            sinks[index].set_volume(volume * equal_power(progress).0);
             if progress >= 1.0 {
                 sinks[index].stop();
                 fade_out = None;
@@ -297,7 +297,7 @@ fn run(
         if let Some((started, len)) = fade_in {
             let progress = (started.elapsed().as_secs_f32() / len.as_secs_f32().max(0.001))
                 .clamp(0.0, 1.0);
-            sinks[active].set_volume(volume * progress);
+            sinks[active].set_volume(volume * equal_power(progress).1);
             if progress >= 1.0 {
                 fade_in = None;
             }
@@ -329,6 +329,11 @@ fn build_decoder(
         builder = builder.with_byte_len(len);
     }
     builder.build()
+}
+
+pub fn equal_power(progress: f32) -> (f32, f32) {
+    let angle = progress.clamp(0.0, 1.0) * std::f32::consts::FRAC_PI_2;
+    (angle.cos(), angle.sin())
 }
 
 pub fn coalesce_play(first: Box<PlayRequest>, queued: Vec<Command>) -> (Box<PlayRequest>, Vec<Command>) {
@@ -592,6 +597,23 @@ mod tests {
             warm: None,
             analyze: false,
         })
+    }
+
+    #[test]
+    fn crossfade_keeps_the_loudness_steady_through_the_middle() {
+        let (out, incoming) = equal_power(0.0);
+        assert!((out - 1.0).abs() < 1e-6 && incoming.abs() < 1e-6);
+        let (out, incoming) = equal_power(1.0);
+        assert!(out.abs() < 1e-6 && (incoming - 1.0).abs() < 1e-6);
+        for step in 0..=20 {
+            let (out, incoming) = equal_power(step as f32 / 20.0);
+            let power = out * out + incoming * incoming;
+            assert!((power - 1.0).abs() < 1e-4, "power {power} at step {step}");
+        }
+        let (out, incoming) = equal_power(0.5);
+        assert!(out + incoming > 1.3, "a linear fade would dip to 1.0 here");
+        assert_eq!(equal_power(-1.0).0, 1.0);
+        assert!((equal_power(5.0).1 - 1.0).abs() < 1e-6);
     }
 
     #[test]

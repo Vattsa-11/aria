@@ -34,6 +34,7 @@ pub fn stream_agent() -> Agent {
 const MAX_CHUNKS: usize = 160;
 const READ_AHEAD: u64 = 3;
 const FILL_SPAN: u64 = 8;
+pub const WARM_FILL_CHUNKS: usize = 8;
 
 const MAX_WHOLE_BODY: u64 = 128 * 1024 * 1024;
 
@@ -191,13 +192,34 @@ impl HttpStream {
         url: String,
         headers: Vec<(String, String)>,
     ) -> Result<Self, String> {
+        Self::open_with(agent, url, headers, MAX_CHUNKS)
+    }
+
+    pub fn open_light(
+        agent: Agent,
+        url: String,
+        headers: Vec<(String, String)>,
+    ) -> Result<Self, String> {
+        Self::open_with(agent, url, headers, WARM_FILL_CHUNKS)
+    }
+
+    pub fn resume_fill(&self) {
+        self.fill_in_background(MAX_CHUNKS);
+    }
+
+    fn open_with(
+        agent: Agent,
+        url: String,
+        headers: Vec<(String, String)>,
+        fill_limit: usize,
+    ) -> Result<Self, String> {
         let shared = Arc::new(Shared {
             cache: Mutex::new(Cache::default()),
             ready: Condvar::new(),
         });
         load_chunk(&shared, &agent, &url, &headers, 0).map_err(|err| err.to_string())?;
         let stream = Self { agent, url, headers, pos: 0, shared };
-        stream.fill_in_background();
+        stream.fill_in_background(fill_limit);
         Ok(stream)
     }
 
@@ -211,7 +233,7 @@ impl HttpStream {
         }
     }
 
-    fn fill_in_background(&self) {
+    fn fill_in_background(&self, limit: usize) {
         let weak = Arc::downgrade(&self.shared);
         let agent = self.agent.clone();
         let url = self.url.clone();
@@ -226,7 +248,7 @@ impl HttpStream {
                 let Some(len) = len else {
                     return;
                 };
-                if index * CHUNK >= len || index as usize >= MAX_CHUNKS {
+                if index * CHUNK >= len || index as usize >= limit {
                     return;
                 }
                 match load_span(&shared, &agent, &url, &headers, index, FILL_SPAN) {

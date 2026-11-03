@@ -44,11 +44,12 @@ fn desktop_sheet(width: f32, sheet_width: f32) -> Sheet {
 }
 
 pub fn breakpoint(width: f32) -> Breakpoint {
-    if width < 640.0 {
+    let live = crate::live::get();
+    if width < live.phone_max.unwrap_or(640.0) {
         Breakpoint::Phone
-    } else if width < 900.0 {
+    } else if width < live.tablet_max.unwrap_or(900.0) {
         Breakpoint::Tablet
-    } else if width < 1280.0 {
+    } else if width < live.desktop_max.unwrap_or(1280.0) {
         Breakpoint::Desktop
     } else {
         Breakpoint::Wide
@@ -56,6 +57,25 @@ pub fn breakpoint(width: f32) -> Breakpoint {
 }
 
 pub fn plan(width: f32) -> Plan {
+    let mut plan = base_plan(width);
+    let live = crate::live::get();
+    if let Some(margin) = live.page_margin {
+        plan.page_margin = margin;
+    }
+    if let Some(card) = live.card_min {
+        plan.card_min = card;
+    }
+    if let Some(sheet) = live.sheet_width {
+        plan.sheet = match plan.sheet {
+            Sheet::Fullscreen => Sheet::Fullscreen,
+            Sheet::Overlay(_) => Sheet::Overlay(sheet),
+            Sheet::Docked(_) => desktop_sheet(width, sheet),
+        };
+    }
+    plan
+}
+
+fn base_plan(width: f32) -> Plan {
     match breakpoint(width) {
         Breakpoint::Phone => Plan {
             breakpoint: Breakpoint::Phone,

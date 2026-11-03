@@ -100,7 +100,7 @@ impl Default for Settings {
             autoplay: true,
             normalize: false,
             battery_saver: false,
-            crossfade: 0.0,
+            crossfade: 4.0,
             jiosaavn_base: String::new(),
             ytdlp_cookie_browser: None,
             region_mode: RegionMode::Ask,

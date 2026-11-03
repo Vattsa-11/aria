@@ -303,7 +303,7 @@ fn handle(job: Job, event_tx: &Sender<Event>) {
             let events = event_tx.clone();
             let _ = thread::Builder::new().name("aria-warm".into()).spawn(move || {
                 let warmed = crate::provider::resolve_chain(&track).ok().and_then(|stream| {
-                    let http = crate::http::HttpStream::open(
+                    let http = crate::http::HttpStream::open_light(
                         crate::http::stream_agent(),
                         stream.url.clone(),
                         stream.headers.clone(),
