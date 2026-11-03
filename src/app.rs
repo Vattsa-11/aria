@@ -303,6 +303,7 @@ impl App {
         crate::embedded::extract_if_missing();
         let _ = app.jobs.tx.send(Job::EnsureYtDlp);
         app.refresh_trending();
+        app.warm_restored_track();
         app
     }
 
@@ -331,7 +332,16 @@ impl App {
     }
 
     pub fn position(&self) -> f64 {
-        self.player.snapshot().position.as_secs_f64()
+        self.resume_position_ms() as f64 / 1000.0
+    }
+
+    fn resume_position_ms(&self) -> u64 {
+        let snapshot = self.player.snapshot();
+        resume_position_ms(
+            snapshot.state == AudioState::Idle && self.current.is_some(),
+            self.pending_start_ms,
+            snapshot.position.as_millis() as u64,
+        )
     }
 
     pub fn duration(&self) -> Option<f64> {
@@ -1629,6 +1639,17 @@ impl App {
         self.notify(format!("Building a {} mix", mood.label().to_lowercase()));
     }
 
+    fn warm_restored_track(&mut self) {
+        let Some(track) = self.current.clone() else {
+            return;
+        };
+        if !track.is_online() || self.is_offline() || self.download_path(track.id).is_some() {
+            return;
+        }
+        self.warm_requested = Some(track.id);
+        let _ = self.jobs.tx.send(Job::Warm { track });
+    }
+
     pub fn refresh_trending(&mut self) {
         let wants = matches!(self.settings.region_mode, RegionMode::Auto | RegionMode::Manual);
         let language = self.settings.region_language.clone().filter(|language| crate::region::is_known_language(language));
@@ -1715,7 +1736,7 @@ impl App {
             return;
         }
         self.last_persist = Instant::now();
-        let position_ms = self.player.snapshot().position.as_millis() as u64;
+        let position_ms = self.resume_position_ms();
         self.writer
             .send(crate::writer::Write::State(Box::new(crate::writer::StateWrite {
                 queue: self.queue.clone(),
@@ -2271,6 +2292,13 @@ pub struct Warmed {
 const WARM_MAX_AGE: Duration = Duration::from_secs(15 * 60);
 const WARM_AFTER_SECS: f64 = 5.0;
 
+pub fn resume_position_ms(idle_with_track: bool, pending: Option<u64>, snapshot_ms: u64) -> u64 {
+    match (idle_with_track, pending) {
+        (true, Some(saved)) => saved,
+        _ => snapshot_ms,
+    }
+}
+
 pub fn warm_is_usable(warmed_id: u64, wanted_id: u64, age: Duration) -> bool {
     warmed_id == wanted_id && age < WARM_MAX_AGE
 }
@@ -2302,6 +2330,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.persist(true);
         self.save_settings_now();
         self.writer.shutdown();
     }
@@ -2315,9 +2344,17 @@ impl eframe::App for App {
 
 #[cfg(test)]
 mod state_tests {
-    use super::{effective_state, should_warm, warm_is_usable};
+    use super::{effective_state, resume_position_ms, should_warm, warm_is_usable};
     use std::time::Duration;
     use crate::player::AudioState;
+
+    #[test]
+    fn a_restored_song_keeps_its_saved_position_until_playback_starts() {
+        assert_eq!(resume_position_ms(true, Some(93_000), 0), 93_000);
+        assert_eq!(resume_position_ms(false, Some(93_000), 4_000), 4_000);
+        assert_eq!(resume_position_ms(true, None, 0), 0);
+        assert_eq!(resume_position_ms(true, None, 7_000), 7_000);
+    }
 
     #[test]
     fn next_track_is_warmed_only_when_useful() {

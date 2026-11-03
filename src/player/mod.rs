@@ -157,7 +157,7 @@ fn run(
                         let mut state = lock(&snapshot);
                         state.state = AudioState::Loading;
                         state.track_id = Some(request.track.id);
-                        state.position = Duration::ZERO;
+                        state.position = request.start;
                         state.duration = request.duration;
                     }
                     let target = if crossfading { 1 - active } else { active };
