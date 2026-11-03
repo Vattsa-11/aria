@@ -447,21 +447,6 @@ fn is_manual(direction: egui::ResizeDirection) -> bool {
     matches!(direction, D::East | D::South | D::SouthEast)
 }
 
-pub fn manual_size(direction: egui::ResizeDirection, start: Vec2, delta: Vec2) -> Vec2 {
-    use egui::ResizeDirection as D;
-    let mut size = start;
-    if matches!(direction, D::East | D::SouthEast) {
-        size.x += delta.x;
-    }
-    if matches!(direction, D::South | D::SouthEast) {
-        size.y += delta.y;
-    }
-    Vec2::new(
-        size.x.clamp(MIN_WIDTH, MAX_WIDTH),
-        size.y.clamp(MIN_HEIGHT, MAX_HEIGHT),
-    )
-}
-
 fn cursor_for(direction: egui::ResizeDirection) -> egui::CursorIcon {
     use egui::{CursorIcon as C, ResizeDirection as D};
     match direction {
@@ -472,40 +457,125 @@ fn cursor_for(direction: egui::ResizeDirection) -> egui::CursorIcon {
     }
 }
 
+fn edges(direction: egui::ResizeDirection) -> (bool, bool, bool, bool) {
+    use egui::ResizeDirection as D;
+    let west = matches!(direction, D::West | D::NorthWest | D::SouthWest);
+    let east = matches!(direction, D::East | D::NorthEast | D::SouthEast);
+    let north = matches!(direction, D::North | D::NorthWest | D::NorthEast);
+    let south = matches!(direction, D::South | D::SouthWest | D::SouthEast);
+    (west, east, north, south)
+}
+
+pub fn resize_rect(direction: egui::ResizeDirection, start: Rect, delta: Vec2) -> Rect {
+    let (west, east, north, south) = edges(direction);
+    let mut min = start.min;
+    let mut max = start.max;
+    if west {
+        min.x = (min.x + delta.x).clamp(max.x - MAX_WIDTH, max.x - MIN_WIDTH);
+    }
+    if east {
+        max.x = (max.x + delta.x).clamp(min.x + MIN_WIDTH, min.x + MAX_WIDTH);
+    }
+    if north {
+        min.y = (min.y + delta.y).clamp(max.y - MAX_HEIGHT, max.y - MIN_HEIGHT);
+    }
+    if south {
+        max.y = (max.y + delta.y).clamp(min.y + MIN_HEIGHT, min.y + MAX_HEIGHT);
+    }
+    Rect::from_min_max(min, max)
+}
+
+#[cfg(windows)]
+mod native {
+    #[repr(C)]
+    struct Point {
+        x: i32,
+        y: i32,
+    }
+
+    extern "system" {
+        fn GetCursorPos(point: *mut Point) -> i32;
+        fn GetAsyncKeyState(key: i32) -> i16;
+    }
+
+    pub fn cursor_pixels() -> Option<(f32, f32)> {
+        let mut point = Point { x: 0, y: 0 };
+        let ok = unsafe { GetCursorPos(&mut point) };
+        (ok != 0).then_some((point.x as f32, point.y as f32))
+    }
+
+    pub fn left_button_down() -> bool {
+        unsafe { GetAsyncKeyState(0x01) < 0 }
+    }
+}
+
+#[cfg(not(windows))]
+mod native {
+    pub fn cursor_pixels() -> Option<(f32, f32)> {
+        None
+    }
+
+    pub fn left_button_down() -> bool {
+        false
+    }
+}
+
+type ResizeStart = (egui::ResizeDirection, Rect, Pos2);
+
+fn screen_cursor(ui: &Ui, outer: Rect, local: Option<Pos2>) -> Option<Pos2> {
+    if let Some((x, y)) = native::cursor_pixels() {
+        let scale = ui.ctx().pixels_per_point().max(0.01);
+        return Some(egui::pos2(x / scale, y / scale));
+    }
+    local.map(|pos| outer.min + pos.to_vec2())
+}
+
 fn resize_borders(ui: &mut Ui, rect: Rect, pal: &Palette) {
     use egui::ViewportCommand;
     let drag_id = ui.scope_id().with("mini-manual-resize");
-    let (press, latest, down, hover) = ui.input(|input| {
+    let (press, latest, down, hover, outer) = ui.input(|input| {
         (
             if input.pointer.primary_pressed() { input.pointer.press_origin() } else { None },
             input.pointer.latest_pos(),
             input.pointer.primary_down(),
             input.pointer.hover_pos(),
+            input.viewport().outer_rect,
         )
     });
 
     if let Some(origin) = press {
         if let Some(direction) = zone_at(rect, origin) {
-            if is_manual(direction) {
-                ui.data_mut(|data| data.insert_temp(drag_id, (direction, origin, rect.size())));
+            let manual_all = cfg!(windows) && outer.is_some();
+            if manual_all || is_manual(direction) {
+                let start_outer = outer.unwrap_or(rect);
+                let start_cursor = screen_cursor(ui, start_outer, Some(origin));
+                if let Some(start_cursor) = start_cursor {
+                    let start: ResizeStart = (direction, start_outer, start_cursor);
+                    ui.data_mut(|data| data.insert_temp(drag_id, start));
+                }
             } else {
                 ui.ctx().send_viewport_cmd(ViewportCommand::BeginResize(direction));
             }
         }
     }
 
-    let active: Option<(egui::ResizeDirection, Pos2, Vec2)> = ui.data(|data| data.get_temp(drag_id));
-    if let Some((direction, origin, start)) = active {
-        if down {
-            if let Some(now) = latest {
-                let size = manual_size(direction, start, now - origin);
-                if (size - rect.size()).length() > 0.5 {
-                    ui.ctx().send_viewport_cmd(ViewportCommand::InnerSize(size));
+    let active: Option<ResizeStart> = ui.data(|data| data.get_temp(drag_id));
+    if let Some((direction, start_outer, start_cursor)) = active {
+        if down || native::left_button_down() {
+            let current_outer = outer.unwrap_or(start_outer);
+            if let Some(cursor) = screen_cursor(ui, current_outer, latest) {
+                let target = resize_rect(direction, start_outer, cursor - start_cursor);
+                if (target.min - current_outer.min).length() > 0.5 {
+                    ui.ctx().send_viewport_cmd(ViewportCommand::OuterPosition(target.min));
+                }
+                if (target.size() - current_outer.size()).length() > 0.5 {
+                    ui.ctx().send_viewport_cmd(ViewportCommand::InnerSize(target.size()));
                 }
             }
             ui.ctx().set_cursor_icon(cursor_for(direction));
+            ui.ctx().request_repaint();
         } else {
-            ui.data_mut(|data| data.remove::<(egui::ResizeDirection, Pos2, Vec2)>(drag_id));
+            ui.data_mut(|data| data.remove::<ResizeStart>(drag_id));
         }
     } else if let Some(direction) = hover.and_then(|pos| zone_at(rect, pos)) {
         ui.ctx().set_cursor_icon(cursor_for(direction));
@@ -1319,14 +1389,28 @@ mod tests {
     }
 
     #[test]
-    fn manual_resize_clamps_to_limits() {
-        use super::manual_size;
-        use egui::{vec2, ResizeDirection as D};
-        let start = vec2(340.0, 200.0);
-        assert_eq!(manual_size(D::SouthEast, start, vec2(40.0, 60.0)), vec2(380.0, 260.0));
-        assert_eq!(manual_size(D::East, start, vec2(500.0, 500.0)), vec2(480.0, 200.0));
-        assert_eq!(manual_size(D::South, start, vec2(-500.0, -500.0)), vec2(340.0, 80.0));
-        assert_eq!(manual_size(D::SouthEast, start, vec2(-500.0, 0.0)), vec2(280.0, 200.0));
+    fn resizing_any_edge_keeps_the_opposite_edge_fixed_and_respects_limits() {
+        use super::resize_rect;
+        use egui::{pos2, vec2, Rect, ResizeDirection as D};
+        let start = Rect::from_min_max(pos2(500.0, 300.0), pos2(840.0, 740.0));
+        let grown = resize_rect(D::West, start, vec2(-60.0, 0.0));
+        assert_eq!((grown.min.x, grown.max.x), (440.0, 840.0));
+        let taller = resize_rect(D::North, start, vec2(0.0, -80.0));
+        assert_eq!((taller.min.y, taller.max.y), (220.0, 740.0));
+        let corner = resize_rect(D::NorthWest, start, vec2(-20.0, -30.0));
+        assert_eq!(corner.max, start.max);
+        assert_eq!(corner.min, pos2(480.0, 270.0));
+        let squeezed = resize_rect(D::West, start, vec2(900.0, 0.0));
+        assert_eq!(squeezed.width(), 280.0);
+        assert_eq!(squeezed.max.x, 840.0);
+        let capped = resize_rect(D::NorthWest, start, vec2(-900.0, -900.0));
+        assert_eq!((capped.width(), capped.height()), (480.0, 640.0));
+        assert_eq!(capped.max, start.max);
+        let se = resize_rect(D::SouthEast, start, vec2(30.0, 40.0));
+        assert_eq!(se.min, start.min);
+        assert_eq!(se.max, pos2(870.0, 780.0));
+        let small = resize_rect(D::SouthEast, start, vec2(-900.0, -900.0));
+        assert_eq!((small.width(), small.height()), (280.0, 80.0));
     }
 
     #[test]
