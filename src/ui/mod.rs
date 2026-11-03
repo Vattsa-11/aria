@@ -62,6 +62,8 @@ pub fn root(app: &mut App, ui: &mut Ui) {
 
     widgets::set_loading(app.audio_state() == crate::player::AudioState::Loading);
     central(app, ui, &lay, reserve);
+    app.window_width = window_width;
+    app.layout_overflow = ctx.globally_used_rect().max.x > window_width + 2.0;
 
     if app.toast.is_some() {
         toast(&ctx, app, accent, &pal);
@@ -429,7 +431,11 @@ fn player_bar_wide(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
         egui::pos2(center_left - 62.0, rect.max.y),
     );
     let clip = painter.with_clip_rect(text_rect);
-    let galley = clip.layout_no_wrap(title, egui::FontId::proportional(14.5), pal.text);
+    let title_font = egui::FontId::proportional(14.5);
+    let title = crate::miniplayer::fit_text(&title, text_rect.width(), |text| {
+        clip.layout_no_wrap(text.to_owned(), title_font.clone(), pal.text).size().x
+    });
+    let galley = clip.layout_no_wrap(title, title_font, pal.text);
     let title_width = galley.size().x;
     let title_y = cy - 10.0 - galley.size().y * 0.5;
     clip.galley(egui::pos2(text_rect.min.x, title_y), galley, pal.text);
@@ -442,11 +448,15 @@ fn player_bar_wide(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
             pal.muted,
         );
     }
+    let artist_font = egui::FontId::proportional(12.0);
+    let artist = crate::miniplayer::fit_text(&artist, text_rect.width(), |text| {
+        clip.layout_no_wrap(text.to_owned(), artist_font.clone(), pal.muted).size().x
+    });
     clip.text(
         egui::pos2(text_rect.min.x, cy + 10.0),
         Align2::LEFT_CENTER,
         artist,
-        egui::FontId::proportional(12.0),
+        artist_font,
         pal.muted,
     );
 
@@ -1004,15 +1014,24 @@ fn central(app: &mut App, ui: &mut Ui, lay: &responsive::Plan, reserve: f32) {
     let pal = theme::palette(app.settings.theme);
     let side_margin = lay.page_margin;
     let top_margin = if lay.phone_bar { 8 + phone::top_inset(ui) as i8 } else { 8 };
-    let right_margin = (side_margin as f32 + reserve).min(120.0 + reserve) as i8;
     egui::CentralPanel::default()
         .frame(Frame::new().fill(pal.bg).inner_margin(Margin {
             left: side_margin,
-            right: right_margin,
+            right: side_margin,
             top: top_margin,
             bottom: 8,
         }))
         .show(ui, |ui| {
+            let mut limited;
+            let ui: &mut Ui = if reserve > 0.0 {
+                let mut rect = ui.available_rect_before_wrap();
+                rect.max.x = (rect.max.x - reserve).max(rect.min.x + 240.0);
+                limited = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                limited.set_clip_rect(rect);
+                &mut limited
+            } else {
+                ui
+            };
             if app.is_offline() {
                 ui.horizontal(|ui| {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

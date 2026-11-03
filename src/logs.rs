@@ -3,6 +3,10 @@ use std::path::Path;
 
 const MAX_BYTES: u64 = 1024 * 1024;
 
+pub fn log_path() -> std::path::PathBuf {
+    crate::settings::data_dir().join("aria.log")
+}
+
 pub fn log(level: &str, message: &str) {
     log_to(&crate::settings::data_dir(), level, message);
 }

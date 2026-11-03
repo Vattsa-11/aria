@@ -1,7 +1,9 @@
+mod agent;
 mod app;
 mod cache;
 mod db;
 mod dialogs;
+mod doctor;
 mod downloads;
 mod embedded;
 mod net;

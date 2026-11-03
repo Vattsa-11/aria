@@ -521,6 +521,69 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
 
             ui.add_space(12.0);
 
+            section(ui, &pal, "Agent mode");
+            card(ui, &pal, |ui| {
+                ui.label(RichText::new("Let an agent drive Aria").size(16.0).color(pal.text));
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(
+                        "Off by default. When on, a program on this computer that has the secret token can fully control the player (play, search, open pages, resize the window, take screenshots, read the error log) and ask Aria to check itself for problems. It listens on this computer only and never on the network.",
+                    )
+                    .size(12.5)
+                    .color(pal.muted),
+                );
+                ui.add_space(10.0);
+                let enabled = app.settings.agent_enabled;
+                ui.horizontal_wrapped(|ui| {
+                    if crate::ui::widgets::pill_button(ui, "Off", !enabled, accent, &pal) && enabled {
+                        app.settings.agent_enabled = false;
+                        app.sync_agent();
+                        app.touch_settings();
+                    }
+                    if crate::ui::widgets::pill_button(ui, "On", enabled, accent, &pal) && !enabled {
+                        app.settings.agent_enabled = true;
+                        app.sync_agent();
+                        app.touch_settings();
+                    }
+                    if crate::ui::widgets::pill_button(ui, "Run diagnostics", false, accent, &pal) {
+                        app.run_doctor();
+                    }
+                });
+                if let Some(handle) = app.agent.as_ref() {
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "Listening on 127.0.0.1:{}. Token file: {}",
+                            handle.port,
+                            handle.token_path.display()
+                        ))
+                        .size(12.0)
+                        .color(pal.muted),
+                    );
+                }
+                if let Some(error) = app.agent_error.clone() {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(error).size(12.0).color(egui::Color32::from_rgb(220, 68, 92)));
+                }
+                for finding in app.agent_findings.clone() {
+                    ui.add_space(8.0);
+                    let color = match finding.severity {
+                        crate::doctor::Severity::Error => egui::Color32::from_rgb(220, 68, 92),
+                        crate::doctor::Severity::Warn => egui::Color32::from_rgb(230, 170, 60),
+                        crate::doctor::Severity::Info => pal.muted,
+                    };
+                    ui.label(RichText::new(format!("{}: {}", finding.severity.label(), finding.title)).size(13.0).color(color).strong());
+                    if !finding.detail.is_empty() {
+                        ui.label(RichText::new(finding.detail).size(12.0).color(pal.muted));
+                    }
+                    if !finding.suggestion.is_empty() {
+                        ui.label(RichText::new(format!("Fix: {}", finding.suggestion)).size(12.0).color(pal.text));
+                    }
+                }
+            });
+
+            ui.add_space(12.0);
+
             section(ui, &pal, "YouTube sign-in");
             card(ui, &pal, |ui| {
                 ui.label(RichText::new("Use my browser's YouTube login").size(16.0).color(pal.text));

@@ -100,6 +100,12 @@ pub struct App {
     pub delete_all: Option<(u8, usize, u64)>,
     warm: Option<Warmed>,
     pub trending: Vec<Track>,
+    pub agent: Option<crate::agent::AgentHandle>,
+    pub agent_error: Option<String>,
+    pub agent_findings: Vec<crate::doctor::Finding>,
+    recent_errors: std::collections::VecDeque<String>,
+    pub window_width: f32,
+    pub layout_overflow: bool,
     features: std::collections::HashMap<u64, crate::pace::Features>,
     features_checked: std::collections::HashSet<u64>,
     pub pace: crate::pace::Profile,
@@ -234,6 +240,12 @@ impl App {
             delete_all: None,
             warm: None,
             trending: Vec::new(),
+            agent: None,
+            agent_error: None,
+            agent_findings: Vec::new(),
+            recent_errors: std::collections::VecDeque::new(),
+            window_width: 0.0,
+            layout_overflow: false,
             features: std::collections::HashMap::new(),
             features_checked: std::collections::HashSet::new(),
             pace: crate::pace::Profile::empty(),
@@ -304,6 +316,7 @@ impl App {
         let _ = app.jobs.tx.send(Job::EnsureYtDlp);
         app.refresh_trending();
         app.warm_restored_track();
+        app.sync_agent();
         app
     }
 
@@ -360,6 +373,10 @@ impl App {
     pub fn fail(&mut self, message: impl Into<String>, action: Option<ToastAction>) {
         let message = message.into();
         crate::logs::error(&message);
+        self.recent_errors.push_back(message.clone());
+        while self.recent_errors.len() > 30 {
+            self.recent_errors.pop_front();
+        }
         self.toast = Some((message, Instant::now()));
         self.toast_action = action;
     }
@@ -1650,6 +1667,302 @@ impl App {
         let _ = self.jobs.tx.send(Job::Warm { track });
     }
 
+    pub fn sync_agent(&mut self) {
+        let wanted = self.settings.agent_enabled || std::env::var_os("ARIA_AGENT").is_some();
+        if !wanted {
+            self.agent = None;
+            self.agent_error = None;
+            return;
+        }
+        if self.agent.is_some() {
+            return;
+        }
+        let Some(ctx) = self.ctx.clone() else {
+            return;
+        };
+        let port = std::env::var("ARIA_AGENT_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(crate::agent::DEFAULT_PORT);
+        match crate::agent::start(ctx, port) {
+            Ok(handle) => {
+                self.agent_error = None;
+                self.agent = Some(handle);
+            }
+            Err(error) => {
+                crate::logs::error(&format!("agent mode could not start: {error}"));
+                self.agent_error = Some(error);
+            }
+        }
+    }
+
+    pub fn doctor_facts(&self) -> crate::doctor::Facts {
+        let log = std::fs::read_to_string(crate::logs::log_path()).unwrap_or_default();
+        let mut lines = crate::agent::tail_lines(&log, 300);
+        lines.extend(self.recent_errors.iter().cloned());
+        crate::doctor::Facts {
+            ytdlp_version: crate::ytdlp::version(),
+            online: self.online,
+            lines,
+            window_width: self.window_width,
+            overflow: self.layout_overflow,
+            today_days: crate::doctor::today_days(),
+        }
+    }
+
+    pub fn run_doctor(&mut self) {
+        let findings = crate::doctor::analyze(&self.doctor_facts());
+        let _ = std::fs::create_dir_all(crate::agent::agent_dir());
+        let _ = std::fs::write(
+            crate::agent::agent_dir().join("doctor-report.md"),
+            crate::doctor::report_markdown(&findings),
+        );
+        self.agent_findings = findings;
+    }
+
+    fn poll_agent(&mut self, ctx: &egui::Context) {
+        loop {
+            let call = match self.agent.as_ref().and_then(|handle| handle.calls.try_recv().ok()) {
+                Some(call) => call,
+                None => break,
+            };
+            self.agent_execute(ctx, call);
+        }
+    }
+
+    fn agent_state(&self, ctx: &egui::Context) -> serde_json::Value {
+        use serde_json::json;
+        let snapshot = self.player.snapshot();
+        let lay = crate::ui::responsive::plan(self.window_width.max(1.0));
+        let track = self.current.as_ref().map(|track| {
+            json!({
+                "id": track.id,
+                "title": track.title,
+                "artist": track.artist,
+                "online": track.is_online(),
+                "provider": track.provider_meta.as_ref().map(|meta| meta.provider.label()),
+            })
+        });
+        json!({
+            "track": track,
+            "audio": format!("{:?}", self.audio_state()).to_lowercase(),
+            "position_secs": self.position(),
+            "duration_secs": self.duration(),
+            "volume": self.settings.volume,
+            "shuffle": self.settings.shuffle,
+            "repeat": format!("{:?}", self.settings.repeat).to_lowercase(),
+            "queue_user": self.queue.user_len(),
+            "page": crate::agent::page_name(self.page),
+            "queue_open": self.queue_open,
+            "lyrics_open": self.lyrics_open,
+            "now_playing_open": self.now_playing_open,
+            "miniplayer_open": self.mini.open,
+            "online": self.online,
+            "offline_mode": self.settings.offline_mode,
+            "search": {
+                "query": self.search.query,
+                "running": self.search.running,
+                "results": self.search.results.len(),
+                "error": self.search.error,
+            },
+            "mood": self.mood.map(|mood| mood.label()),
+            "pace": { "bpm": self.pace.bpm, "energy": self.pace.energy, "samples": self.pace.samples },
+            "ytdlp": crate::ytdlp::discover().map(|path| path.display().to_string()),
+            "window": { "width": self.window_width, "ppp": ctx.pixels_per_point() },
+            "layout": {
+                "breakpoint": format!("{:?}", lay.breakpoint).to_lowercase(),
+                "nav": format!("{:?}", lay.nav).to_lowercase(),
+                "sheet": format!("{:?}", lay.sheet),
+                "overflow": self.layout_overflow,
+            },
+            "player_state_debug": format!("{:?}", snapshot.state),
+            "recent_errors": self.recent_errors.iter().rev().take(10).collect::<Vec<_>>(),
+        })
+    }
+
+    fn agent_execute(&mut self, ctx: &egui::Context, call: crate::agent::Call) {
+        use serde_json::json;
+        let args = call.args.clone();
+        let number = |key: &str| args.get(key).and_then(|value| value.as_f64());
+        let text = |key: &str| args.get(key).and_then(|value| value.as_str()).map(str::to_string);
+        let result: Result<serde_json::Value, String> = match call.cmd.as_str() {
+            "ping" => Ok(json!({ "pong": true, "version": env!("CARGO_PKG_VERSION") })),
+            "state" => Ok(self.agent_state(ctx)),
+            "play" => {
+                if self.audio_state() != AudioState::Playing {
+                    self.toggle_play();
+                }
+                Ok(json!({ "ok": true }))
+            }
+            "pause" => {
+                if self.audio_state() == AudioState::Playing {
+                    self.toggle_play();
+                }
+                Ok(json!({ "ok": true }))
+            }
+            "toggle" => {
+                self.toggle_play();
+                Ok(json!({ "ok": true }))
+            }
+            "next" => {
+                self.play_advance(false);
+                Ok(json!({ "ok": true }))
+            }
+            "prev" => {
+                self.previous();
+                Ok(json!({ "ok": true }))
+            }
+            "seek" => match number("secs") {
+                Some(secs) if secs >= 0.0 => {
+                    self.seek(secs);
+                    Ok(json!({ "ok": true }))
+                }
+                _ => Err("seek needs args.secs (a number of seconds)".to_string()),
+            },
+            "volume" => match number("value") {
+                Some(value) => {
+                    self.set_volume(value as f32);
+                    Ok(json!({ "volume": self.settings.volume }))
+                }
+                None => Err("volume needs args.value between 0 and 1".to_string()),
+            },
+            "like" => {
+                self.toggle_like_current();
+                Ok(json!({ "liked": self.liked_current() }))
+            }
+            "navigate" => match text("page").and_then(|name| crate::agent::parse_page(&name)) {
+                Some(page) => {
+                    self.page = page;
+                    Ok(json!({ "page": crate::agent::page_name(page) }))
+                }
+                None => Err("navigate needs args.page: home, library, search, playlists, liked, history, stats, downloads, import, settings or more".to_string()),
+            },
+            "panel" => {
+                let name = text("name").unwrap_or_default();
+                let on = args.get("open").and_then(|value| value.as_bool());
+                match name.as_str() {
+                    "queue" => self.queue_open = on.unwrap_or(!self.queue_open),
+                    "lyrics" => {
+                        if on.unwrap_or(!self.lyrics_open) != self.lyrics_open {
+                            self.toggle_lyrics();
+                        }
+                    }
+                    "now_playing" => self.now_playing_open = on.unwrap_or(!self.now_playing_open),
+                    "miniplayer" => {
+                        if on.unwrap_or(!self.mini.open) != self.mini.open {
+                            self.toggle_mini();
+                        }
+                    }
+                    _ => return self.agent_reply(call, Err("panel needs args.name: queue, lyrics, now_playing or miniplayer".to_string())),
+                }
+                Ok(json!({ "ok": true }))
+            }
+            "search" => match text("query") {
+                Some(query) if !query.trim().is_empty() => {
+                    self.page = Page::Search;
+                    self.search.query = query;
+                    if let Some(name) = text("provider") {
+                        self.search.provider = match name.to_lowercase().as_str() {
+                            "ytmusic" | "ytm" => Some(crate::provider::ProviderName::YoutubeMusic),
+                            "jiosaavn" | "saavn" => Some(crate::provider::ProviderName::Jiosaavn),
+                            "youtube" | "yt" => Some(crate::provider::ProviderName::Youtube),
+                            _ => None,
+                        };
+                    }
+                    self.run_search();
+                    Ok(json!({ "started": true }))
+                }
+                _ => Err("search needs args.query".to_string()),
+            },
+            "results" => Ok(json!(self
+                .search
+                .results
+                .iter()
+                .take(30)
+                .enumerate()
+                .map(|(index, track)| json!({
+                    "index": index,
+                    "title": track.title,
+                    "artist": track.artist,
+                    "provider": track.provider_meta.as_ref().map(|meta| meta.provider.label()),
+                }))
+                .collect::<Vec<_>>())),
+            "play_result" => match number("index") {
+                Some(index) if (index as usize) < self.search.results.len() => {
+                    self.play_search_result(index as usize);
+                    Ok(json!({ "ok": true }))
+                }
+                _ => Err("play_result needs args.index of an existing search result".to_string()),
+            },
+            "mood" => match text("name").as_deref() {
+                Some("none") | None => {
+                    self.set_mood(None);
+                    Ok(json!({ "mood": null }))
+                }
+                Some(name) => match crate::pace::Mood::ALL.iter().find(|mood| mood.label().eq_ignore_ascii_case(name)) {
+                    Some(mood) => {
+                        self.start_mood_mix(*mood);
+                        Ok(json!({ "mood": mood.label() }))
+                    }
+                    None => Err("mood needs args.name: chill, focus, workout, party, sad or none".to_string()),
+                },
+            },
+            "window" => match (number("width"), number("height")) {
+                (Some(width), Some(height)) if (200.0..=4000.0).contains(&width) && (200.0..=4000.0).contains(&height) => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(width as f32, height as f32)));
+                    Ok(json!({ "requested": [width, height] }))
+                }
+                _ => Err("window needs args.width and args.height between 200 and 4000".to_string()),
+            },
+            "logs" => {
+                let count = number("lines").unwrap_or(40.0).clamp(1.0, 500.0) as usize;
+                let log = std::fs::read_to_string(crate::logs::log_path()).unwrap_or_default();
+                Ok(json!(crate::agent::tail_lines(&log, count)))
+            }
+            "diagnose" => {
+                self.run_doctor();
+                Ok(json!({
+                    "findings": self.agent_findings.iter().map(|finding| finding.to_json()).collect::<Vec<_>>(),
+                    "report": crate::agent::agent_dir().join("doctor-report.md").display().to_string(),
+                }))
+            }
+            "screenshot" => {
+                let reply = call.reply.clone();
+                let dir = crate::agent::agent_dir();
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0);
+                let path = dir.join(format!("shot-{stamp}.png"));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(
+                    move |image: std::sync::Arc<egui::ColorImage>| {
+                        let _ = std::fs::create_dir_all(&dir);
+                        let [width, height] = image.size;
+                        let saved = image::save_buffer(&path, image.as_raw(), width as u32, height as u32, image::ColorType::Rgba8);
+                        let answer = match saved {
+                            Ok(()) => json!({ "path": path.display().to_string(), "width": width, "height": height }),
+                            Err(error) => json!({ "error": format!("could not save the screenshot: {error}") }),
+                        };
+                        let _ = reply.send(answer);
+                    },
+                )));
+                ctx.request_repaint();
+                return;
+            }
+            other => Err(format!("unknown command \"{other}\". Try: ping, state, play, pause, toggle, next, prev, seek, volume, like, navigate, panel, search, results, play_result, mood, window, logs, diagnose, screenshot")),
+        };
+        self.agent_reply(call, result);
+    }
+
+    fn agent_reply(&self, call: crate::agent::Call, result: Result<serde_json::Value, String>) {
+        let value = match result {
+            Ok(value) => value,
+            Err(error) => serde_json::json!({ "error": error }),
+        };
+        let _ = call.reply.send(value);
+    }
+
     pub fn refresh_trending(&mut self) {
         let wants = matches!(self.settings.region_mode, RegionMode::Auto | RegionMode::Manual);
         let language = self.settings.region_language.clone().filter(|language| crate::region::is_known_language(language));
@@ -2317,6 +2630,8 @@ pub fn effective_state(audio: AudioState, resolving: bool) -> AudioState {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let agent_ctx = ui.ctx().clone();
+        self.poll_agent(&agent_ctx);
 
         if self.busy() || self.audio_state() == AudioState::Loading {
             let interval = if self.settings.battery_saver { 250 } else { 80 };

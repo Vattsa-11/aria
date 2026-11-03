@@ -32,6 +32,16 @@ pub struct Plan {
 }
 
 pub const RAIL_WIDTH: f32 = 76.0;
+pub const SIDE_NAV_WIDTH: f32 = 232.0;
+pub const MIN_PAGE_WIDTH: f32 = 640.0;
+
+fn desktop_sheet(width: f32, sheet_width: f32) -> Sheet {
+    if width - SIDE_NAV_WIDTH - sheet_width >= MIN_PAGE_WIDTH {
+        Sheet::Docked(sheet_width)
+    } else {
+        Sheet::Overlay(sheet_width)
+    }
+}
 
 pub fn breakpoint(width: f32) -> Breakpoint {
     if width < 640.0 {
@@ -70,7 +80,7 @@ pub fn plan(width: f32) -> Plan {
             nav: Nav::Side,
             compact_bar: false,
             phone_bar: false,
-            sheet: Sheet::Docked(340.0),
+            sheet: desktop_sheet(width, 340.0),
             page_margin: 24,
             card_min: 156.0,
         },
@@ -79,7 +89,7 @@ pub fn plan(width: f32) -> Plan {
             nav: Nav::Side,
             compact_bar: false,
             phone_bar: false,
-            sheet: Sheet::Docked(380.0),
+            sheet: desktop_sheet(width, 380.0),
             page_margin: 28,
             card_min: 172.0,
         },
@@ -139,11 +149,26 @@ mod tests {
     fn sheets_dock_on_big_screens_and_float_or_fill_on_small_ones() {
         assert_eq!(plan(390.0).sheet, Sheet::Fullscreen);
         assert!(matches!(plan(800.0).sheet, Sheet::Overlay(_)));
-        assert!(matches!(plan(1180.0).sheet, Sheet::Docked(_)));
+        assert!(matches!(plan(1000.0).sheet, Sheet::Overlay(_)), "too narrow to dock without squeezing the page");
+        assert!(matches!(plan(1100.0).sheet, Sheet::Overlay(_)));
+        assert!(matches!(plan(1280.0).sheet, Sheet::Docked(_)));
+        assert!(matches!(plan(1920.0).sheet, Sheet::Docked(_)));
         assert_eq!(sheet_width(Sheet::Fullscreen, 390.0), 390.0);
         assert_eq!(sheet_width(Sheet::Docked(340.0), 300.0), 300.0);
         if let Sheet::Overlay(width) = plan(700.0).sheet {
             assert!((300.0..=380.0).contains(&width));
+        }
+    }
+
+    #[test]
+    fn docking_always_leaves_the_page_a_usable_width() {
+        for width in [900.0f32, 948.0, 1100.0, 1280.0, 1500.0, 1920.0, 2560.0] {
+            let plan = plan(width);
+            let reserve = docked_reserve(plan.sheet, 1);
+            let page = width - SIDE_NAV_WIDTH - reserve;
+            if reserve > 0.0 {
+                assert!(page >= MIN_PAGE_WIDTH, "{width}: page would be {page}");
+            }
         }
     }
 

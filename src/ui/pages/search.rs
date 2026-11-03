@@ -85,19 +85,24 @@ fn result_row(ui: &mut Ui, index: usize, data: ResultRow<'_>) -> Row {
         ui.scope_id().with(("row-like", index)),
         Sense::click(),
     );
+    let heart_icon = if liked { Icon::HeartFilled } else { Icon::Heart };
+    let heart_pop = crate::ui::widgets::heart_scale(ui.ctx(), like_response.id, heart_icon);
     crate::ui::icons::draw(
         ui.painter(),
-        Rect::from_center_size(like_rect.center(), Vec2::splat(22.0)),
-        if liked {
-            Icon::HeartFilled
-        } else {
-            Icon::Heart
-        },
+        Rect::from_center_size(like_rect.center(), Vec2::splat(22.0 * heart_pop)),
+        heart_icon,
         if liked { accent } else { pal.muted },
     );
 
+    let duration_width = if duration.is_some() { 48.0 } else { 0.0 };
+    let duration_right = like_rect.min.x - 6.0;
+    let badge_width = quality
+        .as_ref()
+        .map(|badge| badge.chars().count() as f32 * 7.0 + 12.0)
+        .unwrap_or(0.0);
+    let badge_right = duration_right - duration_width - if duration_width > 0.0 { 8.0 } else { 0.0 };
     let text_left = art_rect.max.x + 14.0;
-    let text_right = menu_rect.min.x - 4.0;
+    let text_right = (badge_right - badge_width - if badge_width > 0.0 { 12.0 } else { 0.0 }).max(text_left + 40.0);
     let title_rect = Rect::from_min_max(
         egui::pos2(text_left, rect.min.y + 6.0),
         egui::pos2(text_right, rect.center().y - 1.0),
@@ -125,12 +130,8 @@ fn result_row(ui: &mut Ui, index: usize, data: ResultRow<'_>) -> Row {
     );
 
     if let Some(duration) = duration {
-        let duration_rect = Rect::from_min_max(
-            egui::pos2(text_left, rect.center().y + 1.0),
-            egui::pos2(text_right, rect.max.y - 6.0),
-        );
         ui.painter().text(
-            egui::pos2(duration_rect.max.x, duration_rect.center().y),
+            egui::pos2(duration_right, rect.center().y),
             Align2::RIGHT_CENTER,
             fmt_time(duration.as_secs_f64()),
             small_font.clone(),
@@ -139,25 +140,15 @@ fn result_row(ui: &mut Ui, index: usize, data: ResultRow<'_>) -> Row {
     }
 
     if let Some(quality) = quality {
-        let badge_text = &quality;
-        let badge_width = badge_text.chars().count() as f32 * 7.0 + 12.0;
-        let duration_offset = if duration.is_some() { badge_width + 8.0 } else { 0.0 };
-        let badge_rect = Rect::from_min_size(
-            egui::pos2(
-                text_right - duration_offset - badge_width,
-                rect.min.y + 6.0,
-            ),
-            Vec2::new(badge_width, 16.0),
+        let badge_rect = Rect::from_center_size(
+            egui::pos2(badge_right - badge_width * 0.5, rect.center().y),
+            Vec2::new(badge_width, 18.0),
         );
-        ui.painter().rect_filled(
-            badge_rect,
-            egui::CornerRadius::same(4),
-            pal.raised,
-        );
+        ui.painter().rect_filled(badge_rect, egui::CornerRadius::same(4), pal.raised);
         ui.painter().text(
             badge_rect.center(),
             Align2::CENTER_CENTER,
-            badge_text,
+            &quality,
             small_font.clone(),
             accent,
         );
