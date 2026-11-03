@@ -408,6 +408,45 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
 
             ui.add_space(12.0);
 
+            section(ui, &pal, "Updates");
+            card(ui, &pal, |ui| {
+                use crate::update::State;
+                let version = env!("CARGO_PKG_VERSION");
+                let status = match &app.update {
+                    State::Idle => format!("Aria {version}"),
+                    State::Checking => "Checking for updates...".to_string(),
+                    State::UpToDate => format!("Aria {version} is the latest version"),
+                    State::Available(release) => format!("Version {} is available (you have {version})", release.version),
+                    State::Downloading(release) => format!("Downloading version {}...", release.version),
+                    State::Ready(_) => "Update downloaded and ready to install".to_string(),
+                    State::Failed(reason) => format!("Update problem: {reason}"),
+                };
+                ui.label(RichText::new(status).size(14.0).color(pal.text));
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    let busy = matches!(app.update, State::Checking | State::Downloading(_));
+                    if crate::ui::widgets::pill_button(ui, "Check for updates", false, accent, &pal) && !busy {
+                        app.check_for_updates();
+                    }
+                    match app.update.clone() {
+                        State::Available(release) => {
+                            let label = if release.asset.is_some() { "Download and install" } else { "Open download page" };
+                            if crate::ui::widgets::pill_button(ui, label, true, accent, &pal) {
+                                app.install_update();
+                            }
+                        }
+                        State::Ready(_) if crate::ui::widgets::pill_button(ui, "Install now", true, accent, &pal) => {
+                            let ctx = ui.ctx().clone();
+                            app.launch_update(&ctx);
+                        }
+                        _ => {}
+                    }
+                });
+                ui.add_space(6.0);
+                ui.label(RichText::new("Aria also checks when it starts. New versions are published on the GitHub releases page.").size(12.5).color(pal.muted));
+            });
+            ui.add_space(12.0);
+
             section(ui, &pal, "About");
             card(ui, &pal, |ui| {
                 ui.label(RichText::new("About").size(16.0).color(pal.text));

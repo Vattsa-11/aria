@@ -13,6 +13,7 @@ mod httpdl;
 mod import;
 mod jobs;
 mod live;
+mod update;
 mod logs;
 mod lyrics;
 mod matchscore;

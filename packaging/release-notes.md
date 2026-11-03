@@ -4,6 +4,15 @@ Aria is a lightweight, touch-first music player. It plays your local files and s
 
 `yt-dlp` {{YTDLP}} is **bundled** in every download, so streaming works the first time you open the app. Nothing needs to be installed separately.
 
+## New in 1.0.2
+
+- **Updates inside the app:** Settings now has an *Updates* card. *Check for updates* looks at the GitHub releases page (Aria also checks when it starts), and *Download and install* fetches the right file for your system and starts it.
+- **Adapts to any window size:** works in small, narrow and short tiled windows. Bottom bars shrink, Search keeps its results visible, and the sidebar scrolls.
+- **Queue and lyrics panels scroll with the mouse wheel and by touch.** The queue shows both the songs you added and the rest of the playlist.
+- **Spotify-style prefetching and Apple Music-style transitions** between songs.
+- **More audio formats for local files:** AIFF, CAF, MKV/WebM audio, MP1/MP2, M4B and more, on top of MP3, FLAC, OGG, M4A/AAC and WAV.
+- Right-click menus on songs, resume the last song on start, a new heart icon, and an optional agent mode for testing.
+
 ## Trying it on Windows (quickest)
 
 1. Download **`aria-windows-x86_64.msi`** below and double-click it. If Windows shows a blue SmartScreen box, choose *More info*, then *Run anyway* (the installer is not code-signed).

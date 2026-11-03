@@ -160,6 +160,7 @@ pub struct App {
     pub focus_search: bool,
     pub now_playing_open: bool,
     pub ytdlp_status: Option<(String, bool)>,
+    pub update: crate::update::State,
     pub fix_match: Option<FixMatchState>,
     pub new_playlist_dialog: bool,
     pub new_playlist_name: String,
@@ -302,6 +303,7 @@ impl App {
             focus_search: false,
             now_playing_open: false,
             ytdlp_status: None,
+            update: crate::update::State::Idle,
             fix_match: None,
             new_playlist_dialog: false,
             new_playlist_name: String::new(),
@@ -322,6 +324,9 @@ impl App {
         };
         crate::embedded::extract_if_missing();
         let _ = app.jobs.tx.send(Job::EnsureYtDlp);
+        if !app.settings.offline_mode {
+            app.check_for_updates();
+        }
         app.refresh_trending();
         app.warm_restored_track();
         app.sync_agent();
@@ -387,6 +392,42 @@ impl App {
         }
         self.toast = Some((message, Instant::now()));
         self.toast_action = action;
+    }
+
+    pub fn check_for_updates(&mut self) {
+        if matches!(self.update, crate::update::State::Checking | crate::update::State::Downloading(_)) {
+            return;
+        }
+        self.update = crate::update::State::Checking;
+        let _ = self.jobs.tx.send(Job::CheckUpdate);
+    }
+
+    pub fn install_update(&mut self) {
+        if let crate::update::State::Available(release) = self.update.clone() {
+            match release.asset.clone() {
+                Some(asset) => {
+                    self.update = crate::update::State::Downloading(release);
+                    let _ = self.jobs.tx.send(Job::DownloadUpdate { asset });
+                }
+                None => {
+                    crate::proc::open_folder(std::path::Path::new(&release.page));
+                }
+            }
+        }
+    }
+
+    pub fn launch_update(&mut self, ctx: &egui::Context) {
+        if let crate::update::State::Ready(path) = self.update.clone() {
+            match crate::update::launch(&path) {
+                Ok(quit) => {
+                    if quit {
+                        self.persist(true);
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+                Err(reason) => self.update = crate::update::State::Failed(reason),
+            }
+        }
     }
 
     pub fn run_toast_action(&mut self) {
@@ -1434,7 +1475,7 @@ impl App {
     pub fn pick_files(&mut self) {
         let files = crate::dialogs::pick_files(
             "Audio",
-            &["mp3", "flac", "ogg", "oga", "m4a", "aac", "wav", "opus", "mp4"],
+            AUDIO_EXTENSIONS,
         );
         if let Some(files) = files {
             self.add_paths(files);
@@ -1789,6 +1830,7 @@ impl App {
             "queue_user": self.queue.user_len(),
             "page": crate::agent::page_name(self.page),
             "queue_open": self.queue_open,
+            "update": format!("{:?}", self.update),
             "lyrics_open": self.lyrics_open,
             "now_playing_open": self.now_playing_open,
             "miniplayer_open": self.mini.open,
@@ -2705,6 +2747,25 @@ impl App {
                         }
                     }
                 }
+                Event::UpdateChecked(result) => {
+                    self.update = match result {
+                        Ok(release) if crate::update::is_newer(env!("CARGO_PKG_VERSION"), &release.version) => crate::update::State::Available(release),
+                        Ok(_) => crate::update::State::UpToDate,
+                        Err(reason) => crate::update::State::Failed(reason),
+                    };
+                    if let Some(ctx) = &self.ctx {
+                        ctx.request_repaint();
+                    }
+                }
+                Event::UpdateDownloaded(result) => {
+                    self.update = match result {
+                        Ok(path) => crate::update::State::Ready(path),
+                        Err(reason) => crate::update::State::Failed(reason),
+                    };
+                    if let Some(ctx) = &self.ctx {
+                        ctx.request_repaint();
+                    }
+                }
                 Event::YtDlp { message, ready } => {
                     let failed = message.contains("failed");
                     let missing = !ready && message.contains("not installed");
@@ -2908,10 +2969,11 @@ impl App {
     }
 }
 
+pub const AUDIO_EXTENSIONS: &[&str] = &[
+    "mp3", "flac", "ogg", "oga", "m4a", "m4b", "aac", "wav", "wave", "opus", "mp4", "aif", "aiff", "aifc", "caf", "mka", "mkv", "webm", "mp2", "mp1",
+];
+
 fn collect_audio_files(folder: &std::path::Path, depth: usize) -> Vec<PathBuf> {
-    const EXTENSIONS: [&str; 9] = [
-        "mp3", "flac", "ogg", "oga", "m4a", "aac", "wav", "opus", "mp4",
-    ];
     let mut found = Vec::new();
     let Ok(entries) = std::fs::read_dir(folder) else {
         return found;
@@ -2927,7 +2989,7 @@ fn collect_audio_files(folder: &std::path::Path, depth: usize) -> Vec<PathBuf> {
         let is_audio = path
             .extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| EXTENSIONS.iter().any(|known| ext.eq_ignore_ascii_case(known)))
+            .map(|ext| AUDIO_EXTENSIONS.iter().any(|known| ext.eq_ignore_ascii_case(known)))
             .unwrap_or(false);
         if is_audio {
             found.push(path);

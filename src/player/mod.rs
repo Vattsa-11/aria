@@ -506,6 +506,56 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
+    fn sine_samples() -> Vec<i16> {
+        (0..8000).map(|n| ((n as f32 * 0.1).sin() * 12000.0) as i16).collect()
+    }
+
+    fn wav_bytes() -> Vec<u8> {
+        let data: Vec<u8> = sine_samples().iter().flat_map(|sample| sample.to_le_bytes()).collect();
+        let mut out = b"RIFF".to_vec();
+        out.extend((36 + data.len() as u32).to_le_bytes());
+        out.extend(b"WAVEfmt ");
+        out.extend(16u32.to_le_bytes());
+        out.extend([1, 0, 1, 0]);
+        out.extend(8000u32.to_le_bytes());
+        out.extend(16000u32.to_le_bytes());
+        out.extend([2, 0, 16, 0]);
+        out.extend(b"data");
+        out.extend((data.len() as u32).to_le_bytes());
+        out.extend(data);
+        out
+    }
+
+    fn aiff_bytes() -> Vec<u8> {
+        let data: Vec<u8> = sine_samples().iter().flat_map(|sample| sample.to_be_bytes()).collect();
+        let mut out = b"FORM".to_vec();
+        out.extend((4 + 26 + 16 + data.len() as u32).to_be_bytes());
+        out.extend(b"AIFFCOMM");
+        out.extend(18u32.to_be_bytes());
+        out.extend(1u16.to_be_bytes());
+        out.extend(8000u32.to_be_bytes());
+        out.extend(16u16.to_be_bytes());
+        out.extend([0x40, 0x0B, 0xFA, 0, 0, 0, 0, 0, 0, 0]);
+        out.extend(b"SSND");
+        out.extend((8 + data.len() as u32).to_be_bytes());
+        out.extend([0u8; 8]);
+        out.extend(data);
+        out
+    }
+
+    #[test]
+    fn decodes_wav_and_aiff_so_more_local_files_play() {
+        for (name, bytes) in [("wav", wav_bytes()), ("aiff", aiff_bytes())] {
+            let path = std::env::temp_dir().join(format!("aria-format-{name}-{}.{name}", std::process::id()));
+            std::fs::write(&path, &bytes).expect("write");
+            let file = File::open(&path).expect("open");
+            let len = file.metadata().ok().map(|meta| meta.len());
+            let decoder = build_decoder(Box::new(BufReader::new(file)), len).unwrap_or_else(|err| panic!("{name}: {err}"));
+            assert!(decoder.count() >= 7_000, "{name}");
+            std::fs::remove_file(&path).ok();
+        }
+    }
+
     struct Counting {
         file: File,
         highest: Arc<Mutex<u64>>,

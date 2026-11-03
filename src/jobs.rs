@@ -25,6 +25,8 @@ pub enum Job {
     Probe,
     EnsureYtDlp,
     DownloadYtDlp,
+    CheckUpdate,
+    DownloadUpdate { asset: crate::update::Asset },
     Lyrics { track: Track },
     Radio { seed: String, video: Option<String> },
     ImportMatch {
@@ -94,6 +96,8 @@ pub enum Event {
         message: String,
         ready: bool,
     },
+    UpdateChecked(Result<crate::update::Release, String>),
+    UpdateDownloaded(Result<std::path::PathBuf, String>),
     Thumb {
         track_id: u64,
         image: Option<ColorImage>,
@@ -452,6 +456,12 @@ fn handle(job: Job, event_tx: &Sender<Event>) {
                 },
             };
             let _ = event_tx.send(event);
+        }
+        Job::CheckUpdate => {
+            let _ = event_tx.send(Event::UpdateChecked(crate::update::check()));
+        }
+        Job::DownloadUpdate { asset } => {
+            let _ = event_tx.send(Event::UpdateDownloaded(crate::update::download(&asset)));
         }
         Job::DownloadYtDlp => {
             let _ = event_tx.send(Event::YtDlp {
