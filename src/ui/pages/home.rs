@@ -5,7 +5,26 @@ use crate::model::Track;
 use crate::ui::icons::Icon;
 use crate::ui::theme::{accent, palette, Palette};
 
-const CARD: f32 = 156.0;
+static CARD_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x431c_0000);
+
+fn card_w() -> f32 {
+    f32::from_bits(CARD_BITS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+fn adapt_cards(ui: &egui::Ui) {
+    let available = ui.available_width();
+    let minimum = if available < 460.0 {
+        140.0
+    } else if available < 800.0 {
+        150.0
+    } else if available < 1300.0 {
+        156.0
+    } else {
+        172.0
+    };
+    let width = crate::ui::responsive::card_width(available, minimum, ui.spacing().item_spacing.x);
+    CARD_BITS.store(width.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
 
 #[derive(Clone, Copy)]
 enum Action {
@@ -29,6 +48,7 @@ pub fn home(app: &mut App, ui: &mut egui::Ui) {
     ScrollArea::vertical().scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, ..Default::default() })
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            adapt_cards(ui);
             ui.add_space(10.0);
             ui.label(
                 RichText::new(greeting())
@@ -85,7 +105,7 @@ pub fn home(app: &mut App, ui: &mut egui::Ui) {
                         }
                         if ui
                             .add_sized(
-                                [CARD, 24.0],
+                                [card_w(), 24.0],
                                 egui::Button::new(
                                     RichText::new("Open").size(11.5).color(accent),
                                 ),
@@ -428,13 +448,13 @@ fn track_strip(
         for (index, track) in tracks.iter().enumerate() {
             let texture = app.thumb(track);
             let (rect, response) =
-                ui.allocate_exact_size(Vec2::new(CARD, CARD + 44.0), Sense::click());
+                ui.allocate_exact_size(Vec2::new(card_w(), card_w() + 44.0), Sense::click());
             if response.hovered() {
                 ui.painter()
                     .rect_filled(rect.expand(4.0), egui::CornerRadius::same(12), pal.raised);
             }
             let art_rect =
-                egui::Rect::from_min_size(rect.min + Vec2::new(4.0, 4.0), Vec2::splat(CARD - 8.0));
+                egui::Rect::from_min_size(rect.min + Vec2::new(4.0, 4.0), Vec2::splat(card_w() - 8.0));
             paint_art(ui, art_rect, texture, &track.title, pal, accent);
             let clip = ui.painter().with_clip_rect(egui::Rect::from_min_max(
                 egui::pos2(rect.min.x + 4.0, art_rect.max.y + 6.0),
@@ -470,13 +490,13 @@ fn card(
     pal: &Palette,
     accent: Color32,
 ) -> bool {
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(CARD, CARD + 40.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(card_w(), card_w() + 40.0), Sense::click());
     if response.hovered() {
         ui.painter()
             .rect_filled(rect.expand(4.0), egui::CornerRadius::same(12), pal.raised);
     }
     let art_rect =
-        egui::Rect::from_min_size(rect.min + Vec2::new(4.0, 4.0), Vec2::splat(CARD - 8.0));
+        egui::Rect::from_min_size(rect.min + Vec2::new(4.0, 4.0), Vec2::splat(card_w() - 8.0));
     crate::ui::widgets::paint_cover(ui.painter(), art_rect, art, 10, accent, pal);
     let clip = ui.painter().with_clip_rect(egui::Rect::from_min_max(
         egui::pos2(rect.min.x + 4.0, art_rect.max.y + 6.0),

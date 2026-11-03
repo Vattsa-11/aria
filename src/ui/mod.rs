@@ -1,6 +1,7 @@
 pub mod icons;
 pub mod pages;
 pub mod phone;
+pub mod responsive;
 pub mod theme;
 pub mod widgets;
 
@@ -27,37 +28,40 @@ pub fn root(app: &mut App, ui: &mut Ui) {
     let accent = theme::accent(&app.settings);
     let pal = theme::palette(app.settings.theme);
     let window_width = ui.max_rect().width();
-    let compact = window_width < 900.0;
-    let phone = phone::is_phone(window_width);
+    let lay = responsive::plan(window_width);
 
     app.tick();
     shortcuts(app, &ctx);
     drop_files(app, &ctx);
 
-    if phone && app.now_playing_open {
+    if lay.phone_bar && app.now_playing_open {
         widgets::set_loading(app.audio_state() == crate::player::AudioState::Loading);
         phone::now_playing(app, ui, accent, &pal);
         return;
     }
-    if phone {
+    if lay.phone_bar {
         phone::tab_bar(app, ui, accent, &pal);
         phone::mini_player(app, ui, accent, &pal);
     } else {
-        if compact {
-            bottom_nav(app, ui, accent, &pal);
-        }
-        player_bar(app, ui, compact, accent, &pal);
+        player_bar(app, ui, lay.compact_bar, accent, &pal);
     }
-    let panel_width = if phone { window_width } else { 360.0 };
-    lyrics_panel(app, ui, accent, &pal, panel_width);
-    queue_panel(app, ui, accent, &pal, panel_width);
 
-    if !compact && !phone {
-        side_nav(app, ui, accent, &pal);
+    let sheet_width = responsive::sheet_width(lay.sheet, window_width);
+    let lyrics_offset = 0.0;
+    lyrics_panel(app, ui, accent, &pal, sheet_width, lyrics_offset);
+    let queue_offset = if app.lyrics_open && !matches!(lay.sheet, responsive::Sheet::Fullscreen) { sheet_width } else { 0.0 };
+    queue_panel(app, ui, accent, &pal, sheet_width, queue_offset);
+    let open_sheets = app.lyrics_open as usize + app.queue_open as usize;
+    let reserve = responsive::docked_reserve(lay.sheet, open_sheets);
+
+    match lay.nav {
+        responsive::Nav::Side => side_nav(app, ui, accent, &pal),
+        responsive::Nav::Rail => rail_nav(app, ui, accent, &pal),
+        responsive::Nav::BottomTabs => {}
     }
 
     widgets::set_loading(app.audio_state() == crate::player::AudioState::Loading);
-    central(app, ui, phone);
+    central(app, ui, &lay, reserve);
 
     if app.toast.is_some() {
         toast(&ctx, app, accent, &pal);
@@ -917,61 +921,94 @@ fn side_nav(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
         });
 }
 
-fn bottom_nav(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
-    egui::Panel::bottom("nav_bottom")
-        .exact_size(66.0)
-        .frame(Frame::new().fill(pal.bg).inner_margin(Margin {
-            left: 10,
-            right: 10,
-            top: 6,
-            bottom: 6,
-        }))
-        .show(ui, |ui| {
-            egui::ScrollArea::horizontal()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let items: [(Icon, &str, Page); 10] = [
-                            (Icon::Home, "Home", Page::Home),
-                            (Icon::Library, "Library", Page::Library),
-                            (Icon::Search, "Search", Page::Search),
-                            (Icon::Queue, "Playlists", Page::Playlists),
-                            (Icon::HeartFilled, "Liked", Page::Liked),
-                            (Icon::Download, "Downloads", Page::Downloads),
-                            (Icon::Import, "Import", Page::Import),
-                            (Icon::Chevron, "History", Page::History),
-                            (Icon::Note, "Stats", Page::Stats),
-                            (Icon::Settings, "Settings", Page::Settings),
-                        ];
-                        for (icon, label, page) in items {
-                            let selected = match (page, app.page) {
-                                (Page::Playlists, Page::PlaylistDetail(_)) => true,
-                                (a, b) => a == b,
-                            };
-
-                            ui.allocate_ui_with_layout(
-                                Vec2::new(96.0, 54.0),
-                                Layout::left_to_right(Align::Center),
-                                |ui| {
-                                    if nav_item(ui, icon, label, selected, accent, pal, 54.0) {
-                                        app.page = page;
-                                    }
-                                },
-                            );
-                        }
-                    });
-                });
+fn sheet(ui: &mut Ui, name: &str, width: f32, offset: f32, pal: &Palette, add: impl FnOnce(&mut Ui)) {
+    let avail = ui.available_rect_before_wrap();
+    let rect = Rect::from_min_max(
+        egui::pos2((avail.max.x - offset - width).max(avail.min.x), avail.min.y),
+        egui::pos2(avail.max.x - offset, avail.max.y),
+    );
+    let area_id = ui.scope_id().with(name);
+    egui::Area::new(area_id)
+        .order(egui::Order::Middle)
+        .fixed_pos(rect.min)
+        .constrain(false)
+        .show(ui.ctx(), |ui| {
+            ui.set_clip_rect(rect);
+            ui.painter().rect_filled(rect, CornerRadius::ZERO, pal.surface);
+            ui.painter().vline(rect.min.x, rect.y_range(), Stroke::new(1.0, pal.line));
+            let _ = ui.interact(rect, area_id.with("block"), Sense::click_and_drag());
+            let inner = Rect::from_min_max(
+                egui::pos2(rect.min.x + 16.0, rect.min.y + 16.0),
+                egui::pos2(rect.max.x - 16.0, rect.max.y - 12.0),
+            );
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner));
+            child.set_clip_rect(inner);
+            add(&mut child);
         });
 }
 
-fn central(app: &mut App, ui: &mut Ui, phone: bool) {
+fn rail_nav(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
+    egui::Panel::left("nav_rail")
+        .exact_size(responsive::RAIL_WIDTH)
+        .resizable(false)
+        .show_separator_line(false)
+        .frame(Frame::new().fill(pal.bg).inner_margin(Margin { left: 8, right: 8, top: 12, bottom: 8 }))
+        .show(ui, |ui| {
+            let items: [(Icon, &str, Page); 10] = [
+                (Icon::Home, "Home", Page::Home),
+                (Icon::Library, "Library", Page::Library),
+                (Icon::Search, "Search", Page::Search),
+                (Icon::Queue, "Playlists", Page::Playlists),
+                (Icon::HeartFilled, "Liked", Page::Liked),
+                (Icon::Download, "Downloads", Page::Downloads),
+                (Icon::Import, "Import", Page::Import),
+                (Icon::Chevron, "History", Page::History),
+                (Icon::Note, "Stats", Page::Stats),
+                (Icon::Settings, "Settings", Page::Settings),
+            ];
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                for (icon, label, page) in items {
+                    let selected = match (page, app.page) {
+                        (Page::Playlists, Page::PlaylistDetail(_)) => true,
+                        (a, b) => a == b,
+                    };
+                    let (rect, response) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 52.0), Sense::click());
+                    if selected {
+                        ui.painter().rect_filled(rect, CornerRadius::same(12), accent.gamma_multiply(0.16));
+                    } else if response.hovered() {
+                        ui.painter().rect_filled(rect, CornerRadius::same(12), pal.raised);
+                    }
+                    icons::draw(
+                        ui.painter(),
+                        Rect::from_center_size(egui::pos2(rect.center().x, rect.min.y + 20.0), Vec2::splat(22.0)),
+                        icon,
+                        if selected { accent } else { pal.muted },
+                    );
+                    ui.painter().text(
+                        egui::pos2(rect.center().x, rect.min.y + 40.0),
+                        Align2::CENTER_CENTER,
+                        label,
+                        egui::FontId::proportional(10.0),
+                        if selected { accent } else { pal.muted },
+                    );
+                    if response.on_hover_text(label).clicked() {
+                        app.page = page;
+                    }
+                    ui.add_space(2.0);
+                }
+            });
+        });
+}
+
+fn central(app: &mut App, ui: &mut Ui, lay: &responsive::Plan, reserve: f32) {
     let pal = theme::palette(app.settings.theme);
-    let side_margin = if phone { 14 } else { 24 };
-    let top_margin = if phone { 8 + phone::top_inset(ui) as i8 } else { 8 };
+    let side_margin = lay.page_margin;
+    let top_margin = if lay.phone_bar { 8 + phone::top_inset(ui) as i8 } else { 8 };
+    let right_margin = (side_margin as f32 + reserve).min(120.0 + reserve) as i8;
     egui::CentralPanel::default()
         .frame(Frame::new().fill(pal.bg).inner_margin(Margin {
             left: side_margin,
-            right: side_margin,
+            right: right_margin,
             top: top_margin,
             bottom: 8,
         }))
@@ -1024,7 +1061,7 @@ fn offline_chip(app: &App, ui: &mut Ui, pal: &Palette) {
 }
 
 
-fn lyrics_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width: f32) {
+fn lyrics_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width: f32, offset: f32) {
     if !app.lyrics_open {
         return;
     }
@@ -1033,16 +1070,7 @@ fn lyrics_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, widt
     let active = crate::lyrics::active_line(&app.lyrics_lines, position);
     let mut seek_to: Option<f64> = None;
 
-    egui::Panel::right("lyrics_panel")
-        .exact_size(width)
-        .resizable(false)
-        .frame(Frame::new().fill(pal.surface).inner_margin(Margin {
-            left: 16,
-            right: 16,
-            top: 16,
-            bottom: 12,
-        }))
-        .show(ui, |ui| {
+    sheet(ui, "lyrics_sheet", width, offset, pal, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Lyrics").size(19.0).color(pal.text).strong());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1116,7 +1144,7 @@ fn lyrics_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, widt
     }
 }
 
-fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width: f32) {
+fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width: f32, offset: f32) {
     if !app.queue_open {
         return;
     }
@@ -1128,16 +1156,7 @@ fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width
         app.queue.context_name.clone()
     };
 
-    egui::Panel::right("queue_panel")
-        .exact_size(width.min(if width < 700.0 { width } else { 340.0 }))
-        .resizable(false)
-        .frame(Frame::new().fill(pal.surface).inner_margin(Margin {
-            left: 16,
-            right: 16,
-            top: 16,
-            bottom: 12,
-        }))
-        .show(ui, |ui| {
+    sheet(ui, "queue_sheet", width, offset, pal, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Queue").size(19.0).color(pal.text).strong());
                 if user_count > 0 {

@@ -7,13 +7,8 @@ use crate::ui::icons::{self, Icon};
 use crate::ui::theme::Palette;
 use crate::ui::widgets::{self, icon_button, primary_icon_button, toggle_icon_button};
 
-pub const PHONE_MAX_WIDTH: f32 = 640.0;
 const TAB_H: f32 = 60.0;
 const MINI_H: f32 = 72.0;
-
-pub fn is_phone(width: f32) -> bool {
-    width < PHONE_MAX_WIDTH
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
@@ -303,14 +298,6 @@ pub fn more_page(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn phone_layout_starts_below_640_points() {
-        assert!(is_phone(360.0));
-        assert!(is_phone(639.9));
-        assert!(!is_phone(640.0));
-        assert!(!is_phone(1180.0));
-    }
 
     #[test]
     fn every_page_belongs_to_a_tab_and_tabs_navigate_back() {
