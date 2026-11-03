@@ -652,13 +652,9 @@ fn icon_button(ui: &mut Ui, id: egui::Id, rect: Rect, icon: Icon, tint: Color32,
 
 fn play_button(ui: &mut Ui, id: egui::Id, rect: Rect, playing: bool, accent: Color32) -> Response {
     let response = ui.interact(rect, id, Sense::click());
-    let fill = if response.hovered() {
-        accent.gamma_multiply(1.15)
-    } else {
-        accent
-    };
-    ui.painter()
-        .circle_filled(rect.center(), rect.width() * 0.5, fill);
+    let _ = accent;
+    let radius = rect.width() * 0.5 * if response.hovered() { 1.06 } else { 1.0 };
+    ui.painter().circle_filled(rect.center(), radius, Color32::WHITE);
     crate::ui::widgets::paint_play_glyph(ui, rect, if playing { Icon::Pause } else { Icon::Play }, Color32::from_rgb(12, 12, 15));
     response
 }

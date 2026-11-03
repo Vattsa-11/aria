@@ -45,6 +45,61 @@ fn poly(points: &[(f32, f32)], center: Pos2, scale: f32) -> Vec<Pos2> {
         .collect()
 }
 
+fn cubic(p0: (f32, f32), p1: (f32, f32), p2: (f32, f32), p3: (f32, f32), t: f32) -> (f32, f32) {
+    let u = 1.0 - t;
+    let w = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+    (
+        w.0 * p0.0 + w.1 * p1.0 + w.2 * p2.0 + w.3 * p3.0,
+        w.0 * p0.1 + w.1 * p1.1 + w.2 * p2.1 + w.3 * p3.1,
+    )
+}
+
+const HEART_SEGMENTS: usize = 14;
+
+fn heart_left_path() -> Vec<(f32, f32)> {
+    let curves = [
+        ((12.0, 5.09), (10.91, 3.81), (9.24, 3.0), (7.5, 3.0)),
+        ((7.5, 3.0), (4.42, 3.0), (2.0, 5.42), (2.0, 8.5)),
+        ((2.0, 8.5), (2.0, 12.28), (5.4, 15.36), (10.55, 20.03)),
+    ];
+    let mut points = Vec::new();
+    for (p0, p1, p2, p3) in curves {
+        for step in 0..HEART_SEGMENTS {
+            points.push(cubic(p0, p1, p2, p3, step as f32 / HEART_SEGMENTS as f32));
+        }
+    }
+    points.push((10.55, 20.03));
+    points.push((12.0, 21.35));
+    points
+}
+
+fn heart_point(center: Pos2, size: f32, point: (f32, f32), mirror: bool) -> Pos2 {
+    let unit = size / 22.0;
+    let x = if mirror { 24.0 - point.0 } else { point.0 };
+    Pos2::new(center.x + (x - 12.0) * unit, center.y + (point.1 - 12.2) * unit)
+}
+
+pub fn heart_outline(center: Pos2, size: f32) -> Vec<Pos2> {
+    let path = heart_left_path();
+    let mut points: Vec<Pos2> = path.iter().map(|point| heart_point(center, size, *point, false)).collect();
+    points.extend(path.iter().rev().map(|point| heart_point(center, size, *point, true)));
+    points
+}
+
+pub fn heart_halves(center: Pos2, size: f32) -> (Vec<Pos2>, Vec<Pos2>) {
+    let path = heart_left_path();
+    let overlap = size / 22.0 * 0.12;
+    let mut left: Vec<Pos2> = path.iter().map(|point| heart_point(center, size, *point, false)).collect();
+    let mut right: Vec<Pos2> = path.iter().map(|point| heart_point(center, size, *point, true)).collect();
+    for point in left.iter_mut() {
+        point.x = point.x.min(center.x + overlap);
+    }
+    for point in right.iter_mut() {
+        point.x = point.x.max(center.x - overlap);
+    }
+    (left, right)
+}
+
 pub fn draw(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
     let center = rect.center();
     let scale = rect.width().min(rect.height());
@@ -161,43 +216,14 @@ pub fn draw(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             }
         }
         Icon::Heart | Icon::HeartFilled => {
-
-            const SEGMENTS: usize = 56;
-            let unit = 0.33 * scale / 16.0;
-            let vertical_offset = 6.0 * unit;
-            let points: Vec<Pos2> = (0..SEGMENTS)
-                .map(|i| {
-                    let t = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-                    let x = 16.0 * t.sin().powi(3);
-                    let y = -(13.0 * t.cos()
-                        - 5.0 * (2.0 * t).cos()
-                        - 2.0 * (3.0 * t).cos()
-                        - (4.0 * t).cos());
-                    Pos2::new(
-                        center.x + x * unit,
-                        center.y + y * unit - vertical_offset,
-                    )
-                })
-                .collect();
+            let size = scale * 0.98;
             if icon == Icon::HeartFilled {
-
-                painter.circle_filled(
-                    Pos2::new(center.x - 0.16 * scale, center.y - 0.07 * scale),
-                    0.17 * scale,
-                    color,
-                );
-                painter.circle_filled(
-                    Pos2::new(center.x + 0.16 * scale, center.y - 0.07 * scale),
-                    0.17 * scale,
-                    color,
-                );
-                painter.add(Shape::convex_polygon(
-                    poly(&[(-0.30, -0.07), (0.30, -0.07), (0.0, 0.30)], center, scale),
-                    color,
-                    Stroke::NONE,
-                ));
+                let (left, right) = heart_halves(center, size);
+                painter.add(Shape::convex_polygon(left, color, Stroke::NONE));
+                painter.add(Shape::convex_polygon(right, color, Stroke::NONE));
             } else {
-                painter.add(Shape::closed_line(points, stroke));
+                let outline = heart_outline(center, size);
+                painter.add(Shape::closed_line(outline, Stroke::new((scale * 0.075).clamp(1.3, 2.2), color)));
             }
         }
         Icon::Queue => {
@@ -408,5 +434,49 @@ pub fn draw(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod heart_tests {
+    use super::*;
+
+    fn is_convex(points: &[Pos2]) -> bool {
+        let mut sign = 0i8;
+        for index in 0..points.len() {
+            let a = points[index];
+            let b = points[(index + 1) % points.len()];
+            let c = points[(index + 2) % points.len()];
+            let cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+            if cross.abs() < 0.05 {
+                continue;
+            }
+            let current = if cross > 0.0 { 1 } else { -1 };
+            if sign == 0 {
+                sign = current;
+            } else if sign != current {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[test]
+    fn each_heart_half_is_convex_so_the_fill_has_no_artifacts() {
+        let (left, right) = heart_halves(Pos2::new(50.0, 50.0), 40.0);
+        assert!(is_convex(&left), "left half is not convex");
+        assert!(is_convex(&right), "right half is not convex");
+    }
+
+    #[test]
+    fn heart_is_symmetric_and_stays_inside_its_box() {
+        let center = Pos2::new(100.0, 100.0);
+        let outline = heart_outline(center, 44.0);
+        let (min_x, max_x) = outline.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.x), hi.max(p.x)));
+        assert!(((center.x - min_x) - (max_x - center.x)).abs() < 0.01);
+        assert!(max_x - min_x <= 44.0 + 0.01);
+        let (min_y, max_y) = outline.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.y), hi.max(p.y)));
+        assert!(max_y - min_y <= 44.0);
+        assert!(outline.len() > 60);
     }
 }

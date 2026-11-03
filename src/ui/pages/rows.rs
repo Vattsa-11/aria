@@ -46,11 +46,16 @@ pub struct MenuView {
     pub downloading: bool,
     pub heart_visible: bool,
     pub show_play: bool,
+    pub has_artist: bool,
+    pub has_link: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuItem {
     Play,
+    GoToArtist,
+    CopyInfo,
+    CopyLink,
     PlayNext,
     AddToQueue,
     Like(bool),
@@ -64,6 +69,9 @@ impl MenuItem {
     fn label(self) -> &'static str {
         match self {
             Self::Play => "Play",
+            Self::GoToArtist => "Go to artist",
+            Self::CopyInfo => "Copy song info",
+            Self::CopyLink => "Copy link",
             Self::PlayNext => "Play next",
             Self::AddToQueue => "Add to queue",
             Self::Like(true) => "Remove from Liked Songs",
@@ -78,6 +86,9 @@ impl MenuItem {
     fn action(self) -> TrackMenuAction {
         match self {
             Self::Play => TrackMenuAction::Play,
+            Self::GoToArtist => TrackMenuAction::GoToArtist,
+            Self::CopyInfo => TrackMenuAction::CopyInfo,
+            Self::CopyLink => TrackMenuAction::CopyLink,
             Self::PlayNext => TrackMenuAction::PlayNext,
             Self::AddToQueue => TrackMenuAction::AddToQueue,
             Self::Like(_) => TrackMenuAction::Like,
@@ -111,6 +122,13 @@ pub fn menu_items(view: &MenuView) -> Vec<MenuItem> {
     } else if view.downloaded {
         items.push(MenuItem::DeleteDownload);
     }
+    if view.has_artist {
+        items.push(MenuItem::GoToArtist);
+    }
+    items.push(MenuItem::CopyInfo);
+    if view.has_link {
+        items.push(MenuItem::CopyLink);
+    }
     items
 }
 
@@ -125,7 +143,12 @@ pub fn show_track_menu(
     if resp.clicked() {
         resp.ctx.data_mut(|data| data.insert_temp(confirm_id, false));
     }
-    egui::Popup::from_toggle_button_response(resp).show(|ui| {
+    let at_pointer = resp.ctx.data(|data| data.get_temp::<bool>(resp.id.with("at-pointer"))).unwrap_or(false);
+    let mut popup = egui::Popup::from_toggle_button_response(resp);
+    if at_pointer {
+        popup = popup.anchor(egui::PopupAnchor::PointerFixed);
+    }
+    popup.show(|ui| {
         ui.set_min_width(220.0);
         for item in menu_items(view) {
             if item == MenuItem::DeleteDownload {
@@ -143,23 +166,34 @@ pub fn show_track_menu(
                 actions.push(item.action());
             }
         }
-        if !playlists.is_empty() {
-            ui.separator();
-            ui.label(egui::RichText::new("Add to playlist").size(12.0).color(pal.muted));
-            for (idx, name) in playlists {
-                if menu_button(ui, name, pal) {
-                    actions.push(TrackMenuAction::AddToPlaylist(*idx));
-                }
+        ui.separator();
+        ui.label(egui::RichText::new("Add to playlist").size(12.0).color(pal.muted));
+        if menu_button(ui, "New playlist with this song", pal) {
+            actions.push(TrackMenuAction::NewPlaylist);
+        }
+        for (idx, name) in playlists {
+            if menu_button(ui, name, pal) {
+                actions.push(TrackMenuAction::AddToPlaylist(*idx));
             }
         }
     });
     actions
 }
 
+pub fn open_menu_on_right_click(ctx: &egui::Context, row: &egui::Response, menu: &egui::Response) {
+    let flag = menu.id.with("at-pointer");
+    if row.secondary_clicked() {
+        ctx.data_mut(|data| data.insert_temp(flag, true));
+        egui::Popup::open_id(ctx, egui::Popup::default_response_id(menu));
+    } else if menu.clicked() {
+        ctx.data_mut(|data| data.insert_temp(flag, false));
+    }
+}
+
 pub fn row_menus(
     app: &mut crate::app::App,
     rows: Vec<(egui::Response, Track)>,
-    kind: MenuKind,
+    _kind: MenuKind,
     pal: &Palette,
 ) {
     if rows.is_empty() {
@@ -178,7 +212,9 @@ pub fn row_menus(
             downloaded: app.is_downloaded(track.id),
             downloading: app.is_downloading(track.id),
             heart_visible: true,
-            show_play: kind == MenuKind::Downloads,
+            show_play: true,
+            has_artist: !track.artist.trim().is_empty(),
+            has_link: track.watch_url().is_some(),
         };
         for action in show_track_menu(&response, &view, &playlists, pal) {
             app.track_menu_for(&track, action);
@@ -275,6 +311,8 @@ pub fn track_row(
         if menu_response.hovered() { pal.text } else { pal.muted },
     );
 
+    open_menu_on_right_click(ui.ctx(), &response, &menu_response);
+
     let like_rect = egui::Rect::from_center_size(
         egui::pos2(right - 22.0, rect.center().y),
         egui::Vec2::splat(MIN_HIT),
@@ -285,10 +323,12 @@ pub fn track_row(
         id_salt.with(("row-like", index)),
         egui::Sense::click(),
     );
+    let heart_icon = if liked { Icon::HeartFilled } else { Icon::Heart };
+    let heart_pop = crate::ui::widgets::heart_scale(ui.ctx(), like_response.id, heart_icon);
     crate::ui::icons::draw(
         ui.painter(),
-        egui::Rect::from_center_size(like_rect.center(), egui::Vec2::splat(22.0)),
-        if liked { Icon::HeartFilled } else { Icon::Heart },
+        egui::Rect::from_center_size(like_rect.center(), egui::Vec2::splat(22.0 * heart_pop)),
+        heart_icon,
         if liked { accent } else { pal.muted },
     );
 
@@ -445,6 +485,8 @@ mod tests {
             downloading: false,
             heart_visible: true,
             show_play: false,
+            has_artist: true,
+            has_link: true,
         }
     }
 
@@ -472,6 +514,19 @@ mod tests {
         let items = menu_items(&busy);
         assert!(items.contains(&MenuItem::CancelDownload));
         assert!(!items.contains(&MenuItem::Download));
+    }
+
+    #[test]
+    fn every_menu_offers_artist_and_copy_actions_when_they_apply() {
+        let items = menu_items(&view());
+        assert!(items.contains(&MenuItem::GoToArtist));
+        assert!(items.contains(&MenuItem::CopyInfo));
+        assert!(items.contains(&MenuItem::CopyLink));
+        let bare = MenuView { has_artist: false, has_link: false, ..view() };
+        let items = menu_items(&bare);
+        assert!(!items.contains(&MenuItem::GoToArtist));
+        assert!(!items.contains(&MenuItem::CopyLink));
+        assert!(items.contains(&MenuItem::CopyInfo));
     }
 
     #[test]

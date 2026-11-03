@@ -650,6 +650,13 @@ impl App {
         self.persist(true);
     }
 
+    pub fn copy_to_clipboard(&mut self, text: String, message: &str) {
+        if let Some(ctx) = &self.ctx {
+            ctx.copy_text(text);
+            self.notify(message);
+        }
+    }
+
     pub fn play_single(&mut self, track: Track) {
         self.queue.set_context(vec![track.clone()], "Now playing");
         self.queue.mark_context_playing(0);
@@ -1130,6 +1137,36 @@ impl App {
     pub fn track_menu_for(&mut self, track: &Track, action: TrackMenuAction) {
         match action {
             TrackMenuAction::Play => self.play_single(track.clone()),
+            TrackMenuAction::GoToArtist => {
+                let artist = track.artist.split([',', '&']).next().unwrap_or("").trim().to_string();
+                if !artist.is_empty() {
+                    self.page = Page::Search;
+                    self.search.query = artist;
+                    self.run_search();
+                }
+            }
+            TrackMenuAction::CopyInfo => {
+                let text = if track.artist.trim().is_empty() {
+                    track.title.clone()
+                } else {
+                    format!("{} - {}", track.artist, track.title)
+                };
+                self.copy_to_clipboard(text, "Copied song info");
+            }
+            TrackMenuAction::CopyLink => {
+                if let Some(link) = track.watch_url() {
+                    self.copy_to_clipboard(link, "Copied link");
+                }
+            }
+            TrackMenuAction::NewPlaylist => {
+                let names: Vec<String> = self.playlists.iter().map(|p| p.name.clone()).collect();
+                let name = crate::suggest::unique_name(&names, "New playlist");
+                let mut playlist = Playlist::new(&name);
+                playlist.tracks.push(track.clone());
+                self.playlists.push(playlist);
+                self.persist_playlists();
+                self.notify(format!("Created {name} with this song"));
+            }
             TrackMenuAction::PlayNext => self.play_next(track.clone()),
             TrackMenuAction::AddToQueue => self.add_to_queue(track.clone()),
             TrackMenuAction::Like => self.toggle_like_track(track),

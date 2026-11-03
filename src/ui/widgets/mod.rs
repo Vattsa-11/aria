@@ -15,9 +15,10 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, size: f32, tint: Color32, active: bo
     } else if response.hovered() || response.is_pointer_button_down_on() {
         ui.painter().rect_filled(rect, radius, hover_fill);
     }
+    let pop = heart_scale(ui.ctx(), response.id, icon);
     icons::draw(
         ui.painter(),
-        Rect::from_center_size(rect.center(), Vec2::splat(size * 0.44)),
+        Rect::from_center_size(rect.center(), Vec2::splat(size * 0.44 * pop)),
         icon,
         tint,
     );
@@ -172,15 +173,20 @@ pub fn paint_play_glyph(ui: &Ui, rect: Rect, icon: Icon, color: Color32) {
     }
 }
 
+pub fn heart_scale(ctx: &egui::Context, id: egui::Id, icon: Icon) -> f32 {
+    if !matches!(icon, Icon::Heart | Icon::HeartFilled) {
+        return 1.0;
+    }
+    let progress = ctx.animate_bool_with_time(id.with("heart-pop"), icon == Icon::HeartFilled, 0.15);
+    1.0 + 0.28 * (progress * std::f32::consts::PI).sin()
+}
+
 pub fn primary_icon_button(ui: &mut Ui, icon: Icon, size: f32, accent: Color32) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
-    let radius = size * 0.5;
-    let fill = if response.hovered() || response.is_pointer_button_down_on() {
-        accent.gamma_multiply(1.15)
-    } else {
-        accent
-    };
-    ui.painter().circle_filled(rect.center(), radius, fill);
+    let hot = response.hovered() || response.is_pointer_button_down_on();
+    let radius = size * 0.5 * if hot { 1.06 } else { 1.0 };
+    let _ = accent;
+    ui.painter().circle_filled(rect.center(), radius, Color32::WHITE);
     paint_play_glyph(ui, rect, icon, Color32::from_rgb(12, 12, 15));
     response
 }
@@ -194,7 +200,7 @@ pub fn seek_bar(
     pal: &Palette,
 ) -> Option<f64> {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 40.0), Sense::click_and_drag());
-    let track_height = 6.0;
+    let track_height = 4.0;
     let track = Rect::from_center_size(rect.center(), Vec2::new(rect.width(), track_height));
     let fraction = if duration > 0.0 {
         (position / duration).clamp(0.0, 1.0) as f32
@@ -203,23 +209,22 @@ pub fn seek_bar(
     };
 
     ui.painter()
-        .rect_filled(track, CornerRadius::same(3), pal.raised);
+        .rect_filled(track, CornerRadius::same(2), pal.raised);
+    let active = response.hovered() || response.is_pointer_button_down_on();
 
     let filled_width = track.width() * fraction;
     if filled_width > 0.5 {
         let filled = Rect::from_min_size(track.min, Vec2::new(filled_width, track.height()));
         ui.painter()
-            .rect_filled(filled, CornerRadius::same(3), accent);
+            .rect_filled(filled, CornerRadius::same(2), if active { accent } else { Color32::WHITE });
     }
-
-    let active = response.hovered() || response.is_pointer_button_down_on();
-    let handle_radius = if active { 9.0 } else { 6.0 };
-    let handle_x = track.min.x + filled_width;
-    ui.painter().circle_filled(
-        egui::pos2(handle_x, track.center().y),
-        handle_radius,
-        if active { Color32::WHITE } else { accent },
-    );
+    if active {
+        ui.painter().circle_filled(
+            egui::pos2(track.min.x + filled_width, track.center().y),
+            6.5,
+            Color32::WHITE,
+        );
+    }
 
     if let Some(pointer) = response.interact_pointer_pos() {
         if response.clicked() || response.dragged() {

@@ -73,6 +73,7 @@ fn result_row(ui: &mut Ui, index: usize, data: ResultRow<'_>) -> Row {
         ui.scope_id().with(("row-menu", index)),
         Sense::click(),
     );
+    crate::ui::pages::rows::open_menu_on_right_click(ui.ctx(), &response, &menu_response);
     icons_draw_menu(ui.painter(), menu_rect, &menu_response, pal);
 
     let like_rect = Rect::from_min_size(

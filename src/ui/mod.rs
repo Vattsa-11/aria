@@ -284,7 +284,7 @@ fn bar_icon(
         ui.painter()
             .rect_filled(rect, radius, ui.visuals().widgets.hovered.weak_bg_fill);
     }
-    let size = rect.width().min(rect.height()) * 0.46;
+    let size = rect.width().min(rect.height()) * 0.46 * widgets::heart_scale(ui.ctx(), id, icon);
     icons::draw(
         ui.painter(),
         Rect::from_center_size(rect.center(), Vec2::splat(size)),
@@ -302,13 +302,10 @@ fn bar_play_button(
     accent: Color32,
 ) -> egui::Response {
     let response = ui.interact(rect, id, Sense::click());
-    let fill = if response.hovered() || response.is_pointer_button_down_on() {
-        accent.gamma_multiply(1.15)
-    } else {
-        accent
-    };
+    let hot = response.hovered() || response.is_pointer_button_down_on();
+    let _ = accent;
     ui.painter()
-        .circle_filled(rect.center(), rect.width() * 0.5, fill);
+        .circle_filled(rect.center(), rect.width() * 0.5 * if hot { 1.06 } else { 1.0 }, Color32::WHITE);
     widgets::paint_play_glyph(ui, rect, if playing { Icon::Pause } else { Icon::Play }, Color32::from_rgb(12, 12, 15));
     response
 }
@@ -335,17 +332,16 @@ fn bar_seek_bar(
         track.min,
         Vec2::new(track.width() * fraction, track.height()),
     );
+    let active = response.hovered() || response.dragged();
     if fraction > 0.0 {
         ui.painter()
-            .rect_filled(filled, CornerRadius::same(2), accent);
+            .rect_filled(filled, CornerRadius::same(2), if active { accent } else { Color32::WHITE });
     }
-
-    let active = response.hovered() || response.dragged();
-    if duration > 0.0 {
+    if duration > 0.0 && active {
         ui.painter().circle_filled(
             egui::pos2(filled.max.x, track.center().y),
-            if active { 7.0 } else { 5.0 },
-            if active { Color32::WHITE } else { accent },
+            6.5,
+            Color32::WHITE,
         );
     }
 
@@ -374,10 +370,9 @@ fn bar_volume(
         track.min,
         Vec2::new(track.width() * value, track.height()),
     );
-    ui.painter()
-        .rect_filled(filled, CornerRadius::same(2), accent);
-
     let active = response.hovered() || response.dragged();
+    ui.painter()
+        .rect_filled(filled, CornerRadius::same(2), if active { accent } else { Color32::WHITE });
     if active {
         ui.painter().circle_filled(
             egui::pos2(filled.max.x, track.center().y),
@@ -413,13 +408,7 @@ fn player_bar_wide(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
         Vec2::splat(art),
     );
     let current_art = app.current_art();
-    crate::ui::widgets::paint_cover(&painter, art_rect, current_art.as_ref(), 10, accent, pal);
-    painter.rect_stroke(
-        art_rect,
-        CornerRadius::same(10),
-        Stroke::new(1.0, pal.line),
-        egui::StrokeKind::Inside,
-    );
+    crate::ui::widgets::paint_cover(&painter, art_rect, current_art.as_ref(), 4, accent, pal);
 
     let title = app
         .current
@@ -433,7 +422,7 @@ fn player_bar_wide(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
         .unwrap_or_else(|| "Add a local file to start".to_string());
     let text_rect = egui::Rect::from_min_max(
         egui::pos2(art_rect.max.x + 14.0, rect.min.y),
-        egui::pos2(center_left - 12.0, rect.max.y),
+        egui::pos2(center_left - 62.0, rect.max.y),
     );
     let clip = painter.with_clip_rect(text_rect);
     let galley = clip.layout_no_wrap(title, egui::FontId::proportional(14.5), pal.text);
@@ -563,8 +552,7 @@ fn player_bar_wide(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
     right -= 44.0 + 6.0;
     let lyrics_rect = egui::Rect::from_center_size(egui::pos2(right - 22.0, cy), Vec2::splat(44.0));
     right -= 44.0 + 6.0;
-    let heart_rect = egui::Rect::from_center_size(egui::pos2(right - 22.0, cy), Vec2::splat(44.0));
-    right -= 44.0 + 8.0;
+    right -= 8.0;
     let volume_rect = egui::Rect::from_min_max(
         egui::pos2(right - 110.0, cy - 16.0),
         egui::pos2(right, cy + 16.0),
@@ -599,13 +587,14 @@ fn player_bar_wide(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
     }
 
     let liked = app.liked_current();
+    let heart_rect = egui::Rect::from_center_size(egui::pos2(center_left - 34.0, cy), Vec2::splat(44.0));
     if bar_icon(
         ui,
-        egui::Id::unique("bar_like"),
+        ui.scope_id().with("bar-like"),
         heart_rect,
         if liked { Icon::HeartFilled } else { Icon::Heart },
         if liked { accent } else { pal.muted },
-        liked,
+        false,
     )
     .clicked()
     {

@@ -14,6 +14,10 @@ pub enum TrackOrigin {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TrackMenuAction {
     Play,
+    GoToArtist,
+    CopyInfo,
+    CopyLink,
+    NewPlaylist,
     PlayNext,
     AddToQueue,
     Like,

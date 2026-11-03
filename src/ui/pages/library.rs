@@ -172,6 +172,7 @@ fn render_row(
         ui.scope_id().with(("menu", index)),
         egui::Sense::click(),
     );
+    crate::ui::pages::rows::open_menu_on_right_click(ui.ctx(), &response, &menu_response);
     crate::ui::icons::draw(
         ui.painter(),
         egui::Rect::from_center_size(menu_rect.center(), egui::Vec2::splat(22.0)),

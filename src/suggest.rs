@@ -14,6 +14,17 @@ pub fn push_recent(list: &mut Vec<String>, query: &str) {
     list.truncate(RECENT_CAP);
 }
 
+pub fn unique_name(existing: &[String], base: &str) -> String {
+    let taken = |name: &str| existing.iter().any(|other| other.eq_ignore_ascii_case(name));
+    if !taken(base) {
+        return base.to_string();
+    }
+    (2..)
+        .map(|n| format!("{base} {n}"))
+        .find(|candidate| !taken(candidate))
+        .unwrap_or_else(|| base.to_string())
+}
+
 pub fn top_artists(sources: &[&[Track]], count: usize) -> Vec<String> {
     let mut tally: HashMap<String, (usize, String)> = HashMap::new();
     for list in sources {
@@ -77,6 +88,13 @@ mod tests {
         assert_eq!(top, vec!["Sid Sriram", "Anirudh"]);
         assert!(top_artists(&[&[]], 3).is_empty());
         assert_eq!(top_artists(&[&liked], 1).len(), 1);
+    }
+
+    #[test]
+    fn new_playlist_names_never_collide() {
+        assert_eq!(unique_name(&[], "New playlist"), "New playlist");
+        let taken = vec!["New playlist".to_string(), "new playlist 2".to_string()];
+        assert_eq!(unique_name(&taken, "New playlist"), "New playlist 3");
     }
 
     #[test]
