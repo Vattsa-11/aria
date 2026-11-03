@@ -105,6 +105,7 @@ pub struct App {
     pub agent_findings: Vec<crate::doctor::Finding>,
     recent_errors: std::collections::VecDeque<String>,
     pub window_width: f32,
+    pub preview_width: Option<f32>,
     pub layout_overflow: bool,
     features: std::collections::HashMap<u64, crate::pace::Features>,
     features_checked: std::collections::HashSet<u64>,
@@ -245,6 +246,7 @@ impl App {
             agent_findings: Vec::new(),
             recent_errors: std::collections::VecDeque::new(),
             window_width: 0.0,
+            preview_width: std::env::var("ARIA_PREVIEW_WIDTH").ok().and_then(|value| value.parse::<f32>().ok()).filter(|width| (200.0..=4000.0).contains(width)),
             layout_overflow: false,
             features: std::collections::HashMap::new(),
             features_checked: std::collections::HashSet::new(),
@@ -1927,7 +1929,24 @@ impl App {
                     "report": crate::agent::agent_dir().join("doctor-report.md").display().to_string(),
                 }))
             }
+            "preview" => {
+                self.preview_width = number("width").filter(|width| (200.0..=4000.0).contains(width)).map(|width| width as f32);
+                ctx.request_repaint();
+                Ok(json!({ "preview_width": self.preview_width }))
+            }
+            "mini_size" => match (number("width"), number("height")) {
+                (Some(width), Some(height)) if self.mini.open => {
+                    ctx.send_viewport_cmd_to(
+                        crate::miniplayer::viewport_id(),
+                        egui::ViewportCommand::InnerSize(egui::vec2(width as f32, height as f32)),
+                    );
+                    Ok(json!({ "requested": [width, height] }))
+                }
+                (Some(_), Some(_)) => Err("the miniplayer is not open; use panel miniplayer first".to_string()),
+                _ => Err("mini_size needs args.width and args.height".to_string()),
+            },
             "screenshot" => {
+                let target = (text("viewport").as_deref() == Some("mini")).then(crate::miniplayer::viewport_id);
                 let reply = call.reply.clone();
                 let dir = crate::agent::agent_dir();
                 let stamp = std::time::SystemTime::now()
@@ -1935,7 +1954,7 @@ impl App {
                     .map(|d| d.as_millis())
                     .unwrap_or(0);
                 let path = dir.join(format!("shot-{stamp}.png"));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(
+                let shot = egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(
                     move |image: std::sync::Arc<egui::ColorImage>| {
                         let _ = std::fs::create_dir_all(&dir);
                         let [width, height] = image.size;
@@ -1946,11 +1965,15 @@ impl App {
                         };
                         let _ = reply.send(answer);
                     },
-                )));
+                ));
+                match target {
+                    Some(id) => ctx.send_viewport_cmd_to(id, shot),
+                    None => ctx.send_viewport_cmd(shot),
+                }
                 ctx.request_repaint();
                 return;
             }
-            other => Err(format!("unknown command \"{other}\". Try: ping, state, play, pause, toggle, next, prev, seek, volume, like, navigate, panel, search, results, play_result, mood, window, logs, diagnose, screenshot")),
+            other => Err(format!("unknown command \"{other}\". Try: ping, state, play, pause, toggle, next, prev, seek, volume, like, navigate, panel, search, results, play_result, mood, window, preview, mini_size, logs, diagnose, screenshot")),
         };
         self.agent_reply(call, result);
     }
@@ -2639,7 +2662,16 @@ impl eframe::App for App {
         }
         self.tick();
         self.ensure_media(frame);
-        crate::ui::root(self, ui);
+        match self.preview_width {
+            Some(width) => {
+                let mut rect = ui.max_rect();
+                rect.max.x = rect.min.x + width.min(rect.width());
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                child.set_clip_rect(rect);
+                crate::ui::root(self, &mut child);
+            }
+            None => crate::ui::root(self, ui),
+        }
         let ctx = ui.ctx().clone();
         crate::miniplayer::show(self, &ctx);
     }

@@ -13,7 +13,7 @@ pub fn import(app: &mut App, ui: &mut egui::Ui) {
     let pal = palette(app.settings.theme);
 
     ui.add_space(10.0);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label(
             RichText::new("Import")
                 .size(28.0)
@@ -29,22 +29,40 @@ pub fn import(app: &mut App, ui: &mut egui::Ui) {
     });
     ui.add_space(10.0);
 
-    ui.horizontal(|ui| {
-        if pill_button(ui, "Choose file", false, accent, &pal) {
-            app.import_file();
-        }
-        ui.add_space(10.0);
-        let width = (ui.available_width() - 260.0).max(160.0);
+    if ui.available_width() < 560.0 {
         ui.add_sized(
-            [width, 34.0],
+            [ui.available_width(), 38.0],
             TextEdit::singleline(&mut app.import.url)
                 .hint_text("Paste a YouTube or YouTube Music playlist URL")
                 .text_color(pal.text),
         );
-        if pill_button(ui, "Import URL", false, accent, &pal) {
-            app.import_url();
-        }
-    });
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            if pill_button(ui, "Choose file", false, accent, &pal) {
+                app.import_file();
+            }
+            if pill_button(ui, "Import URL", false, accent, &pal) {
+                app.import_url();
+            }
+        });
+    } else {
+        ui.horizontal(|ui| {
+            if pill_button(ui, "Choose file", false, accent, &pal) {
+                app.import_file();
+            }
+            ui.add_space(10.0);
+            let width = (ui.available_width() - 260.0).max(160.0);
+            ui.add_sized(
+                [width, 34.0],
+                TextEdit::singleline(&mut app.import.url)
+                    .hint_text("Paste a YouTube or YouTube Music playlist URL")
+                    .text_color(pal.text),
+            );
+            if pill_button(ui, "Import URL", false, accent, &pal) {
+                app.import_url();
+            }
+        });
+    }
 
     if app.import.loading_playlist {
         ui.add_space(8.0);

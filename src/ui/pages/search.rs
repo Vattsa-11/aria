@@ -204,7 +204,7 @@ pub fn search(app: &mut App, ui: &mut Ui) {
 
     ui.horizontal(|ui| {
 
-        let field_width = (ui.available_width() - 140.0).max(160.0);
+        let field_width = (ui.available_width() - 104.0).max(120.0);
         let response = ui.add(
             egui::TextEdit::singleline(&mut app.search.query)
                 .id(search_id)

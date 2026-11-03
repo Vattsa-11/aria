@@ -1200,7 +1200,7 @@ fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width
             match &app.current {
                 Some(track) => {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(&track.title).size(14.5).color(accent));
+                        ui.add(egui::Label::new(RichText::new(&track.title).size(14.5).color(accent)).truncate());
                         if let Some(badge) = track.quality_badge() {
                             ui.label(RichText::new(badge).size(10.0).color(pal.muted));
                         }
@@ -1314,18 +1314,22 @@ fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width
                                 egui::pos2(rect.min.x + 8.0, rect.min.y + 4.0),
                                 egui::pos2(rect.max.x - 8.0, rect.max.y - 4.0),
                             );
-                            ui.painter().with_clip_rect(inner).text(
+                            let title_font = TextStyle::Body.resolve(ui.style());
+                            let artist_font = TextStyle::Small.resolve(ui.style());
+                            let title = widgets::fit_text_to(ui.painter(), &track.title, &title_font, pal.text, inner.width() - 10.0);
+                            let artist = widgets::fit_text_to(ui.painter(), track.display_artist(), &artist_font, pal.muted, inner.width() - 10.0);
+                            ui.painter().text(
                                 egui::pos2(inner.min.x, inner.center().y - 8.0),
                                 Align2::LEFT_CENTER,
-                                &track.title,
-                                TextStyle::Body.resolve(ui.style()),
+                                title,
+                                title_font,
                                 pal.text,
                             );
-                            ui.painter().with_clip_rect(inner).text(
+                            ui.painter().text(
                                 egui::pos2(inner.min.x, inner.center().y + 9.0),
                                 Align2::LEFT_CENTER,
-                                track.display_artist(),
-                                TextStyle::Small.resolve(ui.style()),
+                                artist,
+                                artist_font,
                                 pal.muted,
                             );
                             if response.clicked() {

@@ -282,6 +282,7 @@ pub fn track_row(
     badge: Option<&str>,
 ) -> RowResponse {
     let width = ui.available_width();
+    let show_reorder = show_reorder && width >= 460.0;
     let sense = if drag_state.is_some() && show_reorder {
         egui::Sense::click_and_drag()
     } else {
@@ -429,28 +430,37 @@ pub fn track_row(
 
     let title_color = if dim { pal.text.gamma_multiply(0.45) } else { pal.text };
     let sub_color = if dim { pal.muted.gamma_multiply(0.55) } else { pal.muted };
+    let badge_w = badge.map(|_| 24.0).unwrap_or(0.0);
+    let badge_gap = if badge.is_some() { badge_w + 8.0 } else { 0.0 };
+    let duration_right = text_right - badge_gap;
+    let duration_text = track.duration.map(|d| fmt_time(d.as_secs_f64()));
+    let duration_width = duration_text
+        .as_ref()
+        .map(|text| ui.painter().layout_no_wrap(text.clone(), small_font.clone(), sub_color).size().x + 12.0)
+        .unwrap_or(0.0);
+    let title_max = (text_right - text_left).max(0.0);
+    let artist_max = (duration_right - duration_width - text_left).max(0.0);
+    let title = crate::ui::widgets::fit_text_to(ui.painter(), &track.title, &body_font, title_color, title_max);
     ui.painter().text(
         egui::pos2(text_left, rect.min.y + 14.0),
         egui::Align2::LEFT_TOP,
-        &track.title,
+        title,
         body_font,
         title_color,
     );
+    let artist = crate::ui::widgets::fit_text_to(ui.painter(), track.display_artist(), &small_font, sub_color, artist_max);
     ui.painter().text(
         egui::pos2(text_left, rect.min.y + 36.0),
         egui::Align2::LEFT_TOP,
-        track.display_artist(),
+        artist,
         small_font.clone(),
         sub_color,
     );
-    let badge_w = badge.map(|_| 24.0).unwrap_or(0.0);
-
-    let duration_right = text_right - if badge.is_some() { badge_w + 8.0 } else { 0.0 };
-    if let Some(d) = track.duration {
+    if let Some(text) = duration_text {
         ui.painter().text(
             egui::pos2(duration_right, rect.min.y + 36.0),
             egui::Align2::RIGHT_TOP,
-            fmt_time(d.as_secs_f64()),
+            text,
             small_font,
             sub_color,
         );

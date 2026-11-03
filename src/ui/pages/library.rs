@@ -11,7 +11,7 @@ pub fn library(app: &mut App, ui: &mut egui::Ui) {
     let pal = palette(app.settings.theme);
 
     ui.add_space(10.0);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label(
             egui::RichText::new("Library")
                 .size(28.0)
@@ -24,7 +24,7 @@ pub fn library(app: &mut App, ui: &mut egui::Ui) {
                 .size(14.0)
                 .color(pal.muted),
         );
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if crate::ui::widgets::accent_button(
                 ui,
                 "Add files",

@@ -40,6 +40,24 @@ impl MiniLayout {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct MiniPlan {
+    pub layout: MiniLayout,
+    pub scale: f32,
+    pub show_prev: bool,
+    pub show_volume: bool,
+}
+
+pub fn mini_plan(width: f32, height: f32) -> MiniPlan {
+    let layout = MiniLayout::for_height(height);
+    MiniPlan {
+        layout,
+        scale: (width / 340.0).clamp(0.85, 1.2),
+        show_prev: layout == MiniLayout::Compact && width >= 380.0,
+        show_volume: layout == MiniLayout::Medium && width >= 420.0 && height >= 190.0,
+    }
+}
+
 pub struct MiniState {
     pub open: bool,
     pub placed: bool,
@@ -1014,7 +1032,8 @@ fn gestures(app: &mut App, ui: &mut Ui, rect: Rect) {
 }
 
 fn large(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette) {
-    let pad = 16.0;
+    let plan = mini_plan(rect.width(), rect.height());
+    let pad = 16.0 * plan.scale.min(1.1);
     let inner = rect.width() - pad * 2.0;
     let art_size = (rect.height() * 0.3).clamp(72.0, 220.0).min(inner);
     let art_rect = Rect::from_min_size(
@@ -1036,8 +1055,8 @@ fn large(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette)
         egui::pos2(rect.min.x + pad, title_rect.max.y),
         Vec2::new(text_width, 18.0),
     );
-    text_line(ui, title_rect, &track_title(app), 15.5, pal.text, Align2::LEFT_CENTER);
-    text_line(ui, artist_rect, &track_artist(app), 12.0, pal.muted, Align2::LEFT_CENTER);
+    text_line(ui, title_rect, &track_title(app), 15.5 * plan.scale, pal.text, Align2::LEFT_CENTER);
+    text_line(ui, artist_rect, &track_artist(app), 12.0 * plan.scale, pal.muted, Align2::LEFT_CENTER);
     swipe_zone(
         app,
         ui,
@@ -1189,6 +1208,7 @@ fn large(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette)
 }
 
 fn medium(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette) {
+    let plan = mini_plan(rect.width(), rect.height());
     let pad = 12.0;
     let available = rect.height() - pad * 2.0;
     let art_size = available.min(140.0).min(rect.width() * 0.38);
@@ -1205,7 +1225,7 @@ fn medium(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette
         egui::pos2(text_x, rect.min.y + pad),
         egui::pos2(text_right, rect.min.y + pad + 20.0),
     );
-    text_line(ui, title_rect, &track_title(app), 14.0, pal.text, Align2::LEFT_CENTER);
+    text_line(ui, title_rect, &track_title(app), 14.0 * plan.scale, pal.text, Align2::LEFT_CENTER);
 
     let mut y = title_rect.max.y;
     if roomy {
@@ -1213,7 +1233,7 @@ fn medium(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette
             egui::pos2(text_x, y),
             egui::pos2(text_right, y + 16.0),
         );
-        text_line(ui, artist_rect, &track_artist(app), 11.5, pal.muted, Align2::LEFT_CENTER);
+        text_line(ui, artist_rect, &track_artist(app), 11.5 * plan.scale, pal.muted, Align2::LEFT_CENTER);
         y += 16.0;
     }
 
@@ -1253,10 +1273,20 @@ fn medium(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette
         app.seek(target);
     }
 
+    let volume_width = if plan.show_volume { 96.0 } else { 0.0 };
     let buttons = Rect::from_min_max(
         egui::pos2(text_x, seek_row.max.y),
-        egui::pos2(rect.max.x - pad, rect.max.y - pad),
+        egui::pos2(rect.max.x - pad - volume_width, rect.max.y - pad),
     );
+    if plan.show_volume {
+        let slider = Rect::from_min_max(
+            egui::pos2(rect.max.x - pad - volume_width + 8.0, buttons.min.y),
+            egui::pos2(rect.max.x - pad, buttons.max.y),
+        );
+        if let Some(value) = volume_slider(ui, slider, app.settings.volume, accent, pal) {
+            app.set_volume(value);
+        }
+    }
     let gap = 4.0;
     let unit = ((buttons.width() - gap * 3.0) / 4.0)
         .min(buttons.height().max(28.0))
@@ -1285,6 +1315,8 @@ fn medium(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette
 }
 
 fn compact(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palette) {
+    let plan = mini_plan(rect.width(), rect.height());
+    let font = 12.5 * plan.scale;
     let pad = 8.0;
     let inner_h = rect.height() - pad * 2.0 - 3.0;
     let art_size = inner_h.min(56.0);
@@ -1296,8 +1328,8 @@ fn compact(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palett
     art(ui, art_rect, current_art.as_ref(), accent, pal);
     gestures(app, ui, art_rect);
 
-    let play_size = 44.0;
-    let next_size = 44.0;
+    let play_size = (44.0 * plan.scale).clamp(38.0, 50.0);
+    let next_size = play_size;
     let next_rect = Rect::from_center_size(
         egui::pos2(rect.max.x - pad - next_size * 0.5, art_rect.center().y),
         Vec2::splat(next_size),
@@ -1307,17 +1339,27 @@ fn compact(app: &mut App, ui: &mut Ui, rect: Rect, accent: Color32, pal: &Palett
         Vec2::splat(play_size),
     );
 
+    let prev_rect = Rect::from_center_size(
+        egui::pos2(play_rect.min.x - 2.0 - next_size * 0.5, art_rect.center().y),
+        Vec2::splat(next_size),
+    );
+    let controls_left = if plan.show_prev { prev_rect.min.x } else { play_rect.min.x };
     let text_rect = Rect::from_min_max(
         egui::pos2(art_rect.max.x + 10.0, rect.min.y + pad),
-        egui::pos2(play_rect.min.x - 8.0, rect.max.y - pad - 3.0),
+        egui::pos2(controls_left - 8.0, rect.max.y - pad - 3.0),
     );
+    if plan.show_prev
+        && icon_button(ui, egui::Id::unique("mini-c-prev"), prev_rect, Icon::Prev, pal.text, false).clicked()
+    {
+        app.previous();
+    }
     let label = format!("{}  ·  {}", track_title(app), track_artist(app));
     swipe_zone(app, ui, text_rect, "mini-compact-swipe");
     let offset = scroll_offset(ui, app, &label, text_rect.width());
     if offset > 0.0 {
-        paint_scrolled_text(ui, text_rect, &label, 12.5, pal.text, offset);
+        paint_scrolled_text(ui, text_rect, &label, font, pal.text, offset);
     } else {
-        text_line(ui, text_rect, &label, 12.5, pal.text, Align2::LEFT_CENTER);
+        text_line(ui, text_rect, &label, font, pal.text, Align2::LEFT_CENTER);
     }
     if offset > 0.0 && app.is_playing() {
         ui.ctx().request_repaint_after(Duration::from_millis(60));
@@ -1435,6 +1477,25 @@ mod tests {
         assert_eq!(fit_text("", 0.0, measure), "");
         let trimmed = fit_text("ab cd ef gh ij kl", 60.0, measure);
         assert!(!trimmed.contains(" …"));
+    }
+
+    #[test]
+    fn the_mini_plan_adapts_to_width_as_well_as_height() {
+        use super::mini_plan;
+        let narrow = mini_plan(280.0, 80.0);
+        assert_eq!(narrow.layout, MiniLayout::Compact);
+        assert!(narrow.scale < 0.9 && !narrow.show_prev);
+        let wide_strip = mini_plan(480.0, 90.0);
+        assert!(wide_strip.show_prev && wide_strip.scale > 1.1);
+        assert!(!mini_plan(480.0, 200.0).show_prev, "medium already has previous");
+        assert!(mini_plan(480.0, 220.0).show_volume);
+        assert!(!mini_plan(340.0, 220.0).show_volume);
+        assert!(!mini_plan(480.0, 150.0).show_volume);
+        assert!(!mini_plan(480.0, 440.0).show_volume);
+        for width in [280.0, 340.0, 480.0] {
+            let scale = mini_plan(width, 300.0).scale;
+            assert!((0.85..=1.2).contains(&scale));
+        }
     }
 
     #[test]

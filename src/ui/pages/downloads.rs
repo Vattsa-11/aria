@@ -73,7 +73,7 @@ pub fn downloads(app: &mut App, ui: &mut egui::Ui) {
             ui.add_space(6.0);
             ui.label(
                 egui::RichText::new(
-                    "Use the ⋮ menu on any song and pick Download to keep it for offline playback",
+                    "Use the three-dot menu on any song, or right-click it, and pick Download to keep it for offline playback",
                 )
                 .size(14.0)
                 .color(pal.muted),

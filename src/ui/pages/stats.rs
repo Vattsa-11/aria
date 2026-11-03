@@ -45,16 +45,18 @@ pub fn stats(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
 
+    let tile = ((ui.available_width() - 28.0) / 3.0 - 32.0).clamp(64.0, 150.0);
     ui.horizontal(|ui| {
-        summary(ui, &pal, accent, "Plays", &stats.total_plays.to_string());
+        summary(ui, &pal, accent, tile, "Plays", &stats.total_plays.to_string());
         summary(
             ui,
             &pal,
             accent,
-            "Hours listened",
+            tile,
+            "Hours",
             &format!("{:.1}", stats.total_seconds as f64 / 3600.0),
         );
-        summary(ui, &pal, accent, "Artists", &stats.top_artists.len().to_string());
+        summary(ui, &pal, accent, tile, "Artists", &stats.top_artists.len().to_string());
     });
     ui.add_space(14.0);
 
@@ -65,7 +67,7 @@ pub fn stats(app: &mut App, ui: &mut egui::Ui) {
         });
 }
 
-fn summary(ui: &mut egui::Ui, pal: &Palette, accent: egui::Color32, label: &str, value: &str) {
+fn summary(ui: &mut egui::Ui, pal: &Palette, accent: egui::Color32, min_width: f32, label: &str, value: &str) {
     egui::Frame::new()
         .fill(pal.surface)
         .corner_radius(egui::CornerRadius::same(12))
@@ -76,7 +78,7 @@ fn summary(ui: &mut egui::Ui, pal: &Palette, accent: egui::Color32, label: &str,
             bottom: 12,
         })
         .show(ui, |ui| {
-            ui.set_min_width(150.0);
+            ui.set_min_width(min_width);
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new(value).size(24.0).color(accent).strong());
                 ui.label(egui::RichText::new(label).size(12.5).color(pal.muted));
@@ -165,9 +167,15 @@ fn card(ui: &mut egui::Ui, pal: &Palette, title: &str, body: impl FnOnce(&mut eg
 
 fn row(ui: &mut egui::Ui, pal: &Palette, left: &str, right: &str) {
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(left).size(13.5).color(pal.text));
+        let right_label = egui::RichText::new(right).size(12.5).color(pal.muted);
+        let right_width = ui.painter().layout_no_wrap(right.to_owned(), egui::FontId::proportional(12.5), pal.muted).size().x;
+        let left_width = (ui.available_width() - right_width - 34.0).max(40.0);
+        ui.add_sized(
+            [left_width, 18.0],
+            egui::Label::new(egui::RichText::new(left).size(13.5).color(pal.text)).truncate(),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(right).size(12.5).color(pal.muted));
+            ui.label(right_label);
         });
     });
     ui.add_space(4.0);

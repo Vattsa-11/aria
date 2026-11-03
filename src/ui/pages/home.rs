@@ -391,7 +391,7 @@ fn shortcut_grid(
     ];
 
     let width = ui.available_width();
-    let tile_width = ((width - 12.0) * 0.5).clamp(180.0, 340.0);
+    let tile_width = if width < 460.0 { width } else { ((width - 12.0) * 0.5).clamp(180.0, 340.0) };
     ui.horizontal_wrapped(|ui| {
         for (label, icon, action, subtitle) in entries {
             let (rect, response) =

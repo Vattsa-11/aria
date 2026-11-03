@@ -173,6 +173,12 @@ pub fn paint_play_glyph(ui: &Ui, rect: Rect, icon: Icon, color: Color32) {
     }
 }
 
+pub fn fit_text_to(painter: &egui::Painter, text: &str, font: &FontId, color: Color32, max_width: f32) -> String {
+    crate::miniplayer::fit_text(text, max_width.max(0.0), |candidate| {
+        painter.layout_no_wrap(candidate.to_owned(), font.clone(), color).size().x
+    })
+}
+
 pub fn heart_scale(ctx: &egui::Context, id: egui::Id, icon: Icon) -> f32 {
     if !matches!(icon, Icon::Heart | Icon::HeartFilled) {
         return 1.0;
