@@ -17,31 +17,29 @@ env:
   YTDLP_VERSION: "2026.10.26"
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        env:
+          WINDOWS_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_only }}
+        run: |
+          windows='{"os":"windows-latest","label":"windows-x86_64","binary":"target/release/aria.exe","raw":"aria-windows-x86_64.exe","ytdlp_asset":"yt-dlp.exe","ytdlp_name":"yt-dlp.exe","features":"--features embed-ytdlp"}'
+          linux='{"os":"ubuntu-latest","label":"linux-x86_64","binary":"target/release/aria","raw":"aria-linux-x86_64","ytdlp_asset":"yt-dlp_linux","ytdlp_name":"yt-dlp","features":""}'
+          macos='{"os":"macos-latest","label":"macos-aarch64","binary":"target/release/aria","raw":"aria-macos-aarch64","ytdlp_asset":"yt-dlp_macos","ytdlp_name":"yt-dlp","features":""}'
+          if [ "$WINDOWS_ONLY" = "true" ]; then
+            echo "matrix={\"include\":[$windows]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "matrix={\"include\":[$windows,$linux,$macos]}" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: plan
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            label: windows-x86_64
-            binary: target/release/aria.exe
-            raw: aria-windows-x86_64.exe
-            ytdlp_asset: yt-dlp.exe
-            ytdlp_name: yt-dlp.exe
-            features: --features embed-ytdlp
-          - os: ubuntu-latest
-            label: linux-x86_64
-            binary: target/release/aria
-            raw: aria-linux-x86_64
-            ytdlp_asset: yt-dlp_linux
-            ytdlp_name: yt-dlp
-          - os: macos-latest
-            label: macos-aarch64
-            binary: target/release/aria
-            raw: aria-macos-aarch64
-            ytdlp_asset: yt-dlp_macos
-            ytdlp_name: yt-dlp
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.windows_only != true || matrix.os == 'windows-latest' }}
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
