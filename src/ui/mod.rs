@@ -824,6 +824,7 @@ fn side_nav(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
                 ui.label(RichText::new("Aria").size(21.0).color(pal.text).strong());
             });
             ui.add_space(16.0);
+            egui::ScrollArea::vertical().auto_shrink([false, false]).scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, ..Default::default() }).show(ui, |ui| {
             if nav_item(
                 ui,
                 Icon::Home,
@@ -931,6 +932,7 @@ fn side_nav(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
             ) {
                 app.page = Page::Settings;
             }
+            });
         });
 }
 
@@ -949,7 +951,7 @@ fn sheet(ui: &mut Ui, name: &str, width: f32, offset: f32, pal: &Palette, add: i
             ui.set_clip_rect(rect);
             ui.painter().rect_filled(rect, CornerRadius::ZERO, pal.surface);
             ui.painter().vline(rect.min.x, rect.y_range(), Stroke::new(1.0, pal.line));
-            let _ = ui.interact(rect, area_id.with("block"), Sense::click_and_drag());
+            ui.allocate_rect(rect, Sense::click_and_drag());
             let inner = Rect::from_min_max(
                 egui::pos2(rect.min.x + 16.0, rect.min.y + 16.0),
                 egui::pos2(rect.max.x - 16.0, rect.max.y - 12.0),

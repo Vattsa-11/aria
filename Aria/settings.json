@@ -1,0 +1,53 @@
+{
+  "accent": [
+    79,
+    140,
+    255
+  ],
+  "theme": "Dark",
+  "volume": 0.8,
+  "library": [],
+  "library_folders": [],
+  "shuffle": false,
+  "repeat": "Off",
+  "eq": {
+    "custom": [],
+    "enabled": false,
+    "preset": "Flat",
+    "preamp": 0.0,
+    "gains": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "mini": {
+    "width": 340.0,
+    "height": 440.0,
+    "x": null,
+    "y": null
+  },
+  "mini_opacity": 1.0,
+  "mini_auto_fade": false,
+  "offline_mode": false,
+  "autoplay": true,
+  "normalize": false,
+  "battery_saver": false,
+  "crossfade": 4.0,
+  "jiosaavn_base": "",
+  "ytdlp_cookie_browser": null,
+  "region_mode": "Ask",
+  "region_language": null,
+  "region_label": null,
+  "recent_searches": [
+    "love"
+  ],
+  "agent_enabled": false
+}

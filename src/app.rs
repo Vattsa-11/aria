@@ -1967,7 +1967,7 @@ impl App {
                 "navigate", "panel", "search", "results", "play_result", "queue", "queue_add", "queue_remove", "queue_clear",
                 "playlists", "playlist", "playlist_create", "playlist_add", "playlist_play", "playlist_delete",
                 "list", "play_list", "download", "download_cancel", "download_delete", "lyrics", "lyrics_refresh",
-                "import_url", "region", "sleep", "mood", "settings", "set_setting", "window", "preview", "mini_size",
+                "import_url", "region", "sleep", "mood", "settings", "set_setting", "window", "preview", "layer_at", "mini_size",
                 "logs", "diagnose", "screenshot"
             ])),
             "shuffle" => {
@@ -2224,6 +2224,13 @@ impl App {
                     None => std::fs::write(&file, crate::live::TEMPLATE).map(|()| json!({ "template": file.display().to_string() })).map_err(|error| error.to_string()),
                 }
             }
+            "layer_at" => match (number("x"), number("y")) {
+                (Some(x), Some(y)) => {
+                    let layer = ctx.layer_id_at(egui::pos2(x as f32, y as f32));
+                    Ok(json!({ "layer": layer.map(|layer| format!("{:?}", layer.order)) }))
+                }
+                _ => Err("layer_at needs x and y".to_string()),
+            },
             "preview" => {
                 self.preview_width = number("width").filter(|width| (200.0..=4000.0).contains(width)).map(|width| width as f32);
                 ctx.request_repaint();
