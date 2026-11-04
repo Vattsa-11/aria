@@ -111,6 +111,7 @@ dependencies = [
  "egui",
  "embed-resource",
  "image",
+ "js-sys",
  "raw-window-handle",
  "rfd",
  "rodio",
@@ -119,6 +120,9 @@ dependencies = [
  "serde_json",
  "souvlaki",
  "ureq",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
