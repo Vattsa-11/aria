@@ -92,3 +92,6 @@ assets = [
     ["assets/icon-256.png", "usr/share/icons/hicolor/256x256/apps/aria.png", "644"],
     ["ytdlp-download", "usr/lib/aria/yt-dlp", "755"],
 ]
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Os", "--all-features"]
