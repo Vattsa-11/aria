@@ -25,7 +25,7 @@ pub fn downloads(app: &mut App, ui: &mut egui::Ui) {
     });
     ui.add_space(4.0);
     ui.label(
-        egui::RichText::new(format!("Available offline · saved to {}", crate::downloads::dir().display()))
+        egui::RichText::new(saved_where())
             .size(12.5)
             .color(pal.muted),
     );
@@ -134,4 +134,14 @@ pub fn downloads(app: &mut App, ui: &mut egui::Ui) {
     app.prefetch_thumbs(&ahead);
     crate::ui::pages::rows::row_menus(app, rows, crate::ui::pages::rows::MenuKind::Downloads, &pal);
     ui.add_space(20.0);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn saved_where() -> String {
+    format!("Available offline · saved to {}", crate::downloads::dir().display())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn saved_where() -> String {
+    "Available offline · stored on this device by the app".to_string()
 }

@@ -427,6 +427,35 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
 
             #[cfg(target_arch = "wasm32")]
             {
+                section(ui, &pal, "Storage");
+                card(ui, &pal, |ui| {
+                    match crate::install::storage() {
+                        Some(info) => {
+                            ui.label(RichText::new(format!("{} used of {} available", crate::install::megabytes(info.usage), crate::install::megabytes(info.quota))).size(16.0).color(pal.text));
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new(if info.persisted {
+                                    "Your library, likes and offline songs are kept on this device and will not be cleared automatically."
+                                } else {
+                                    "The browser may clear this data if the device runs low on space. Allow persistent storage to keep it."
+                                })
+                                .size(12.5)
+                                .color(pal.muted),
+                            );
+                            if !info.persisted {
+                                ui.add_space(10.0);
+                                if crate::ui::widgets::pill_button(ui, "Keep my data", true, accent, &pal) {
+                                    crate::install::request_persist();
+                                }
+                            }
+                        }
+                        None => {
+                            ui.label(RichText::new("Storage information is not available in this browser.").size(13.0).color(pal.muted));
+                        }
+                    }
+                });
+                ui.add_space(12.0);
+
                 section(ui, &pal, "Install");
                 card(ui, &pal, |ui| {
                     let state = crate::install::state();

@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Aria</title>
 <meta name="theme-color" content="#0e0f13">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Aria">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<script src="/gate.js"></script>
+
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon-192.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -16,6 +22,74 @@ window.ariaInstallState = () => {
   if (matchMedia("(display-mode: standalone)").matches || navigator.standalone) return "installed";
   if (installPrompt) return "available";
   return /iphone|ipad|ipod/i.test(navigator.userAgent) ? "ios" : "browser";
+};
+window.ariaStorageRefresh = async () => {
+  try {
+    const estimate = await navigator.storage.estimate();
+    const persisted = await navigator.storage.persisted();
+    window.__ariaStorage = JSON.stringify({ usage: estimate.usage || 0, quota: estimate.quota || 0, persisted });
+  } catch {}
+};
+window.ariaRequestPersist = async () => {
+  try {
+    const granted = await navigator.storage.persist();
+    await window.ariaStorageRefresh();
+    return granted;
+  } catch { return false; }
+};
+if (navigator.storage?.persist) {
+  navigator.storage.persist().finally(() => window.ariaStorageRefresh());
+  setInterval(() => window.ariaStorageRefresh(), 5000);
+}
+window.ariaDownload = async (id, url, progress) => {
+  const cache = await caches.open("aria-offline");
+  const parts = [];
+  let done = 0;
+  if (url.startsWith("/api/audio")) {
+    let size = 0;
+    for (;;) {
+      const response = await fetch(url, { headers: { Range: `bytes=${done}-` } });
+      if (response.status !== 206 && response.status !== 200) throw new Error(`Server answered ${response.status}`);
+      const range = response.headers.get("content-range");
+      if (range) size = Number(range.split("/")[1]) || size;
+      const chunk = await response.arrayBuffer();
+      if (chunk.byteLength === 0) break;
+      parts.push(chunk);
+      done += chunk.byteLength;
+      progress(done, size);
+      if (response.status === 200 || (size && done >= size)) break;
+    }
+  } else {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Server answered ${response.status}`);
+    const size = Number(response.headers.get("content-length")) || 0;
+    const reader = response.body.getReader();
+    for (;;) {
+      const { value, done: finished } = await reader.read();
+      if (finished) break;
+      parts.push(value);
+      done += value.byteLength;
+      progress(done, size);
+    }
+  }
+  if (done < 50000) throw new Error("The download came back empty");
+  const blob = new Blob(parts, { type: "audio/mp4" });
+  await cache.put(new Request(`/offline/${id}`), new Response(blob, { headers: { "content-type": "audio/mp4", "content-length": String(blob.size) } }));
+  window.ariaStorageRefresh?.();
+  return blob.size;
+};
+window.ariaOfflineUrl = async (id) => {
+  const cache = await caches.open("aria-offline");
+  const response = await cache.match(new Request(`/offline/${id}`));
+  return response ? URL.createObjectURL(await response.blob()) : null;
+};
+window.ariaOfflineDelete = async (id) => {
+  await (await caches.open("aria-offline")).delete(new Request(`/offline/${id}`));
+  window.ariaStorageRefresh?.();
+};
+window.ariaOfflineClear = async () => {
+  await caches.delete("aria-offline");
+  window.ariaStorageRefresh?.();
 };
 window.ariaInstall = async () => {
   if (!installPrompt) return "unavailable";
@@ -47,7 +121,9 @@ const params = new URLSearchParams(location.search);
 const webgl2 = (() => {
   try { return !!document.createElement("canvas").getContext("webgl2"); } catch { return false; }
 })();
-if (params.get("ui") === "classic" || typeof WebAssembly !== "object" || !webgl2) {
+if (window.__ariaBlocked) {
+  document.getElementById("splash")?.remove();
+} else if (params.get("ui") === "classic" || typeof WebAssembly !== "object" || !webgl2) {
   classic(params.get("ui") === "classic" ? "chosen" : "unsupported");
 } else {
   let running = false;
@@ -84,6 +160,7 @@ if (params.get("ui") === "classic" || typeof WebAssembly !== "object" || !webgl2
     splash.style.opacity = "0";
     setTimeout(() => splash.remove(), 300);
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+    window.ariaStorageRefresh?.();
   } catch (error) {
     console.error("aria: failed to load", error);
     if (!running) classic(encodeURIComponent(error.message || "load"));

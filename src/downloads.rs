@@ -13,8 +13,19 @@ pub fn ensure_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn existing(track_id: u64) -> Option<PathBuf> {
     existing_in(&dir(), track_id)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn existing(track_id: u64) -> Option<PathBuf> {
+    Some(PathBuf::from(format!("offline/{track_id}")))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn offline_id(path: &Path) -> Option<u64> {
+    path.strip_prefix("offline").ok()?.to_str()?.parse().ok()
 }
 
 pub fn playback_track(track: &crate::model::Track, local: Option<PathBuf>) -> crate::model::Track {
@@ -45,8 +56,14 @@ fn existing_in(folder: &Path, track_id: u64) -> Option<PathBuf> {
     None
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn stats() -> (usize, u64) {
     stats_in(&dir())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn stats() -> (usize, u64) {
+    (0, 0)
 }
 
 fn stats_in(dir: &Path) -> (usize, u64) {
@@ -60,8 +77,15 @@ fn stats_in(dir: &Path) -> (usize, u64) {
         .fold((0, 0), |(count, bytes), meta| (count + 1, bytes + meta.len()))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn clear_all() -> usize {
     clear_in(&dir())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn clear_all() -> usize {
+    crate::install::call_named("ariaOfflineClear");
+    0
 }
 
 fn clear_in(dir: &Path) -> usize {
@@ -102,11 +126,18 @@ fn remove_partials_in(folder: &Path, stem: &str) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn remove(track_id: u64) -> bool {
     match existing(track_id) {
         Some(path) => std::fs::remove_file(path).is_ok(),
         None => false,
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn remove(track_id: u64) -> bool {
+    crate::install::call_with("ariaOfflineDelete", &track_id.to_string());
+    true
 }
 
 #[cfg(test)]

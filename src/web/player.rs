@@ -36,11 +36,19 @@ struct Graph {
     events: Sender<Event>,
 }
 
+#[derive(Clone)]
 pub struct PlayerHandle {
     graph: Rc<RefCell<Option<Graph>>>,
     pending_volume: Rc<RefCell<f32>>,
     events: Sender<Event>,
     eq: Arc<EqParams>,
+}
+
+async fn offline_url(id: u64) -> Option<String> {
+    let window = web_sys::window()?;
+    let function = js_sys::Reflect::get(&window, &"ariaOfflineUrl".into()).ok()?.dyn_into::<js_sys::Function>().ok()?;
+    let promise = function.call1(&window, &id.to_string().into()).ok()?;
+    wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(promise)).await.ok()?.as_string()
 }
 
 fn wake_up() {
@@ -264,6 +272,32 @@ impl PlayerHandle {
     }
 
     pub fn send(&self, command: Command) {
+        if let Command::Play(request) = &command {
+            if request.resolved.is_none() {
+                if let Some(id) = request.track.local_path().and_then(crate::downloads::offline_id) {
+                    let Command::Play(mut request) = command else { return };
+                    let handle = self.clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        match offline_url(id).await {
+                            Some(url) => {
+                                let provider = request.track.provider_meta.as_ref().map(|meta| meta.provider).unwrap_or(crate::provider::ProviderName::Jiosaavn);
+                                request.resolved = Some(crate::provider::ResolvedStream { url, headers: Vec::new(), duration: request.duration, provider, bitrate_kbps: None });
+                                handle.dispatch(Command::Play(request));
+                            }
+                            None => {
+                                let _ = handle.events.send(Event::AudioError { message: "The offline copy of this song is missing. Download it again.".to_string() });
+                                wake_up();
+                            }
+                        }
+                    });
+                    return;
+                }
+            }
+        }
+        self.dispatch(command);
+    }
+
+    fn dispatch(&self, command: Command) {
         if let Command::SetVolume(volume) = &command {
             *self.pending_volume.borrow_mut() = *volume;
         }

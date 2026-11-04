@@ -150,7 +150,11 @@ pub fn tracks_from(json: &Value) -> Vec<Track> {
 
 thread_local! {
     static RESOLVED: RefCell<std::collections::HashMap<u64, (String, ProviderName)>> = RefCell::new(std::collections::HashMap::new());
+    static LOOKING: RefCell<std::collections::HashSet<u64>> = RefCell::new(std::collections::HashSet::new());
+    static FAILED: RefCell<std::collections::HashMap<u64, web_time::Instant>> = RefCell::new(std::collections::HashMap::new());
 }
+
+const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
 
 fn resolve_path(track: &Track) -> Option<String> {
     let provider = track.provider_meta.as_ref().map(|meta| meta.provider)?;
@@ -185,11 +189,46 @@ pub fn peek_url(track: &Track) -> Option<String> {
     if let Some((url, _)) = RESOLVED.with(|map| map.borrow().get(&track.id).cloned()) {
         return Some(url);
     }
+    if FAILED.with(|map| map.borrow().get(&track.id).is_some_and(|at| at.elapsed() < RETRY_AFTER)) {
+        return None;
+    }
+    if !LOOKING.with(|set| set.borrow_mut().insert(track.id)) {
+        return None;
+    }
     let track = track.clone();
     spawn_local(async move {
-        let _ = resolve_url(&track).await;
+        if resolve_url(&track).await.is_err() {
+            FAILED.with(|map| map.borrow_mut().insert(track.id, web_time::Instant::now()));
+        }
+        LOOKING.with(|set| set.borrow_mut().remove(&track.id));
     });
     None
+}
+
+fn js_error(value: wasm_bindgen::JsValue) -> String {
+    if let Some(text) = value.as_string() {
+        return text;
+    }
+    js_sys::Reflect::get(&value, &"message".into()).ok().and_then(|message| message.as_string()).unwrap_or_else(|| "Download failed".to_string())
+}
+
+async fn download_track(track: &Track, events: &Sender<Event>) -> Result<std::path::PathBuf, String> {
+    use wasm_bindgen::closure::Closure;
+    let (url, _) = resolve_url(track).await?;
+    let id = track.id;
+    let progress_events = events.clone();
+    let progress = Closure::<dyn FnMut(f64, f64)>::new(move |done: f64, total: f64| {
+        let _ = progress_events.send(Event::DownloadProgress { track_id: id, done: done as u64, total: if total > 0.0 { Some(total as u64) } else { None } });
+        wake();
+    });
+    let window = web_sys::window().ok_or("no window")?;
+    let function = js_sys::Reflect::get(&window, &"ariaDownload".into())
+        .map_err(js_error)?
+        .dyn_into::<js_sys::Function>()
+        .map_err(|_| "Offline storage is not available in this browser".to_string())?;
+    let promise = function.call3(&window, &id.to_string().into(), &url.into(), progress.as_ref()).map_err(js_error)?;
+    JsFuture::from(js_sys::Promise::from(promise)).await.map_err(js_error)?;
+    Ok(std::path::PathBuf::from(format!("offline/{id}")))
 }
 
 async fn run(job: Job, events: Sender<Event>) {
@@ -236,7 +275,10 @@ async fn run(job: Job, events: Sender<Event>) {
             emit(&events, Event::Lyrics { track_id: track.id, result });
         }
         Job::Radio { seed, .. } => emit(&events, Event::Radio { seed, tracks: Vec::new(), error: Some("Radio is not available in the browser".to_string()) }),
-        Job::Download { track, .. } => emit(&events, Event::Download { track, result: Err("Downloads are not available in the browser".to_string()) }),
+        Job::Download { track, .. } => {
+            let result = download_track(&track, &events).await;
+            emit(&events, Event::Download { track, result });
+        }
         Job::FixMatch { track } => emit(&events, Event::FixMatch { track_id: track.id, alternatives: Vec::new(), error: Some("Not available in the browser".to_string()) }),
         Job::ImportMatch { token, index, .. } => emit(&events, Event::ImportMatch { token, index, tracks: Vec::new(), error: Some("Importing is not available in the browser yet".to_string()) }),
         Job::ImportPlaylist { token, .. } => emit(&events, Event::ImportPlaylist { token, tracks: Vec::new(), error: Some("Importing is not available in the browser yet".to_string()) }),
