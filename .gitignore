@@ -4,3 +4,6 @@ AGENTS.md
 .claude/
 freebuff-chat-*.md
 bundled/
+Aria/
+*.db
+web/.wrangler/

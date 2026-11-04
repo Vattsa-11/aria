@@ -130,11 +130,27 @@ pub fn data_dir() -> PathBuf {
             return PathBuf::from(dir);
         }
     }
-    let base = std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join("Aria")
+    default_base(
+        std::env::var_os("APPDATA").map(PathBuf::from),
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from),
+        std::env::var_os("HOME").map(PathBuf::from),
+    )
+    .join("Aria")
+}
+
+pub fn default_base(appdata: Option<PathBuf>, local_appdata: Option<PathBuf>, xdg_data: Option<PathBuf>, home: Option<PathBuf>) -> PathBuf {
+    if let Some(dir) = appdata.or(local_appdata) {
+        return dir;
+    }
+    if let Some(dir) = xdg_data.filter(|dir| dir.is_absolute()) {
+        return dir;
+    }
+    match home.filter(|dir| dir.is_absolute()) {
+        Some(home) if cfg!(target_os = "macos") => home.join("Library").join("Application Support"),
+        Some(home) => home.join(".local").join("share"),
+        None => PathBuf::from("."),
+    }
 }
 
 fn settings_path() -> PathBuf {
@@ -170,5 +186,20 @@ pub fn save(settings: &Settings) {
     }
     if let Ok(raw) = serde_json::to_string_pretty(settings) {
         let _ = std::fs::write(settings_path(), raw);
+    }
+}
+
+#[cfg(test)]
+mod data_dir_tests {
+    use std::path::PathBuf;
+
+    #[test]
+    fn data_never_lands_in_the_launch_folder_when_a_home_exists() {
+        let home = Some(PathBuf::from("/home/someone"));
+        let base = super::default_base(None, None, None, home.clone());
+        assert!(base.starts_with("/home/someone"), "{base:?}");
+        assert_eq!(super::default_base(None, None, Some(PathBuf::from("/data")), home.clone()), PathBuf::from("/data"));
+        assert_eq!(super::default_base(Some(PathBuf::from("C:/Users/x/AppData/Roaming")), None, None, home), PathBuf::from("C:/Users/x/AppData/Roaming"));
+        assert_eq!(super::default_base(None, None, Some(PathBuf::from("relative")), None), PathBuf::from("."));
     }
 }
