@@ -1,3 +1,4 @@
+pub mod gestures;
 pub mod icons;
 pub mod pages;
 pub mod phone;
@@ -32,6 +33,9 @@ pub fn root(app: &mut App, ui: &mut Ui) {
     let short_desktop = !lay.phone_bar && ui.max_rect().height() < 420.0;
 
     app.tick();
+    if let Some(track) = gestures::take_queue_request(&ctx) {
+        app.add_to_queue(track);
+    }
     shortcuts(app, &ctx);
     drop_files(app, &ctx);
 

@@ -113,8 +113,8 @@ fn encode(value: &str) -> String {
 
 fn source_of(provider: Option<ProviderName>) -> &'static str {
     match provider {
-        Some(ProviderName::Youtube) | Some(ProviderName::YoutubeMusic) => "youtube",
-        _ => "jiosaavn",
+        Some(ProviderName::Jiosaavn) => "jiosaavn",
+        _ => "youtube",
     }
 }
 
@@ -155,7 +155,12 @@ pub fn stream_url(track: &Track) -> Option<(String, ProviderName)> {
         crate::model::TrackSource::Jiosaavn { id } => id.clone(),
         crate::model::TrackSource::Local(_) => return None,
     };
-    Some((format!("/api/audio?source={}&id={}", source_of(Some(provider)), encode(&id)), provider))
+    let mut path = format!("/api/audio?source={}&id={}", source_of(Some(provider)), encode(&id));
+    if provider != ProviderName::Jiosaavn {
+        let seconds = track.duration.map(|duration| duration.as_secs()).unwrap_or(0);
+        path.push_str(&format!("&t={}&a={}&d={}", encode(&track.title), encode(track.display_artist()), seconds));
+    }
+    Some((path, provider))
 }
 
 async fn run(job: Job, events: Sender<Event>) {
@@ -188,8 +193,22 @@ async fn run(job: Job, events: Sender<Event>) {
             let online = web_sys::window().map(|window| window.navigator().on_line()).unwrap_or(true);
             emit(&events, Event::Connectivity { online });
         }
-        Job::Region => emit(&events, Event::Region { result: Err("Location is not used in the browser".to_string()) }),
-        Job::Lyrics { track } => emit(&events, Event::Lyrics { track_id: track.id, result: Err("Lyrics are not available yet".to_string()) }),
+        Job::Region => {
+            let result = match get_json("/api/region").await {
+                Ok(json) => crate::region::parse_geo(&json),
+                Err(err) => Err(err),
+            };
+            emit(&events, Event::Region { result });
+        }
+        Job::Lyrics { track } => {
+            let seconds = track.duration.map(|duration| duration.as_secs()).unwrap_or(0);
+            let path = format!("/api/lyrics?t={}&a={}&d={}", encode(&track.title), encode(track.display_artist()), seconds);
+            let result = match get_json(&path).await {
+                Ok(json) => json["lyrics"].as_str().map(String::from).ok_or_else(|| "No lyrics found".to_string()),
+                Err(err) => Err(err),
+            };
+            emit(&events, Event::Lyrics { track_id: track.id, result });
+        }
         Job::Radio { seed, .. } => emit(&events, Event::Radio { seed, tracks: Vec::new(), error: Some("Radio is not available in the browser".to_string()) }),
         Job::Download { track, .. } => emit(&events, Event::Download { track, result: Err("Downloads are not available in the browser".to_string()) }),
         Job::FixMatch { track } => emit(&events, Event::FixMatch { track_id: track.id, alternatives: Vec::new(), error: Some("Not available in the browser".to_string()) }),

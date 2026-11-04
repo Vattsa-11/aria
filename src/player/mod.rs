@@ -54,6 +54,8 @@ pub enum Command {
     Resume,
     Seek(Duration),
     SetVolume(f32),
+    #[cfg(target_arch = "wasm32")]
+    Preload(String),
     Stop,
 }
 

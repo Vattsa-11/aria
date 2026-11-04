@@ -156,7 +156,15 @@ pub fn mini_player(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
         .show(ui, |ui| {
             let card = ui.max_rect();
             ui.painter().rect_filled(card, CornerRadius::same(14), pal.raised);
-            let open = ui.interact(card, ui.scope_id().with("phone-mini-open"), Sense::click());
+            let open = ui.interact(card, ui.scope_id().with("phone-mini-open"), Sense::click_and_drag());
+            let (pull, swiped) = crate::ui::gestures::swipe(ui, &open);
+            match swiped {
+                Some(crate::ui::gestures::Swipe::Left) => app.play_advance(false),
+                Some(crate::ui::gestures::Swipe::Right) => app.previous(),
+                Some(crate::ui::gestures::Swipe::Up) => app.now_playing_open = true,
+                _ => {}
+            }
+            let card = card.translate(Vec2::new((pull.x * 0.5).clamp(-60.0, 60.0), 0.0));
             let art_side = (card.height() - 12.0).clamp(28.0, 48.0);
             let art_rect = Rect::from_min_size(
                 egui::pos2(card.min.x + 8.0, card.center().y - art_side / 2.0),
@@ -219,6 +227,13 @@ pub fn now_playing(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
             bottom: (12.0 + bottom) as i8,
         }))
         .show(ui, |ui| {
+            let backdrop = ui.interact(ui.max_rect(), ui.scope_id().with("now-playing-swipe"), Sense::drag());
+            match crate::ui::gestures::swipe(ui, &backdrop).1 {
+                Some(crate::ui::gestures::Swipe::Down) => app.now_playing_open = false,
+                Some(crate::ui::gestures::Swipe::Left) => app.play_advance(false),
+                Some(crate::ui::gestures::Swipe::Right) => app.previous(),
+                _ => {}
+            }
             let width = ui.available_width();
             ui.horizontal(|ui| {
                 if icon_button(ui, Icon::ChevronDown, 48.0, pal.text, false).clicked() {

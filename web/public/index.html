@@ -8,21 +8,41 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon-192.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<script>
+let installPrompt = null;
+window.addEventListener("beforeinstallprompt", (event) => { event.preventDefault(); installPrompt = event; });
+window.addEventListener("appinstalled", () => { installPrompt = null; });
+window.ariaInstallState = () => {
+  if (matchMedia("(display-mode: standalone)").matches || navigator.standalone) return "installed";
+  if (installPrompt) return "available";
+  return /iphone|ipad|ipod/i.test(navigator.userAgent) ? "ios" : "browser";
+};
+window.ariaInstall = async () => {
+  if (!installPrompt) return "unavailable";
+  installPrompt.prompt();
+  const choice = await installPrompt.userChoice;
+  installPrompt = null;
+  return choice.outcome;
+};
+</script>
 <style>
 html,body{margin:0;height:100%;background:#0e0f13;color:#f2f3f5;font:16px system-ui,sans-serif;overflow:hidden}
 canvas{width:100%;height:100%;display:block;touch-action:none;outline:none}
 #splash{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#0e0f13;transition:opacity .25s}
 #splash img{width:84px;height:84px;border-radius:20px}
 #splash i{width:28px;height:28px;border:3px solid #262a33;border-top-color:#4f8cff;border-radius:50%;animation:spin 1s linear infinite}
-#splash a{color:#9aa0ab;font-size:.85rem}
+#splash a,#stage{color:#9aa0ab;font-size:.85rem}
 @keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
 <canvas id="aria-canvas"></canvas>
-<div id="splash"><img src="/icon-192.png" alt=""><i></i><a href="/classic">Having trouble? Use the classic version</a></div>
+<div id="splash"><img src="/icon-192.png" alt=""><i></i><span id="stage">Starting...</span><a href="/classic">Having trouble? Use the classic version</a></div>
 <script type="module">
+const stage = (text) => { const el = document.getElementById("stage"); if (el) el.textContent = text; };
 const classic = (why) => location.replace(`/classic?why=${why}`);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const within = (promise, ms, label) => Promise.race([promise, sleep(ms).then(() => { throw new Error(`${label} timed out`); })]);
 const params = new URLSearchParams(location.search);
 const webgl2 = (() => {
   try { return !!document.createElement("canvas").getContext("webgl2"); } catch { return false; }
@@ -34,16 +54,31 @@ if (params.get("ui") === "classic" || typeof WebAssembly !== "object" || !webgl2
   window.addEventListener("error", (event) => {
     if (!running && /unreachable|RuntimeError/.test(String(event.message))) classic("crash");
   });
+  window.addEventListener("unhandledrejection", (event) => console.error("aria: unhandled", event.reason));
+  let holdsLibrary = false;
   if (navigator.locks) {
-    navigator.locks.request("aria-library", { ifAvailable: true }, (lock) => {
-      if (!lock) { window.__ariaSecondTab = true; return; }
-      return new Promise(() => {});
+    await new Promise((resolve) => {
+      navigator.locks.request("aria-library", { ifAvailable: true }, (lock) => {
+        holdsLibrary = !!lock;
+        resolve();
+        return lock ? new Promise(() => {}) : undefined;
+      });
     });
+  } else {
+    holdsLibrary = true;
   }
   try {
-    const { default: init, start } = await import("/pkg/aria.js");
-    await init();
-    await start("aria-canvas");
+    stage("Downloading Aria...");
+    const { default: init, start, open_library } = await import("/pkg/aria.js");
+    await within(init(), 60000, "download");
+    if (holdsLibrary) {
+      stage("Opening your library...");
+      await within(open_library(), 10000, "library").catch((error) => console.warn("aria: library not saved:", error.message));
+    } else {
+      console.warn("aria: open in another tab, changes here will not be saved");
+    }
+    stage("Starting...");
+    await within(start("aria-canvas"), 20000, "start");
     running = true;
     const splash = document.getElementById("splash");
     splash.style.opacity = "0";
@@ -51,7 +86,7 @@ if (params.get("ui") === "classic" || typeof WebAssembly !== "object" || !webgl2
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
   } catch (error) {
     console.error("aria: failed to load", error);
-    if (!running) classic("load");
+    if (!running) classic(encodeURIComponent(error.message || "load"));
   }
 }
 </script>

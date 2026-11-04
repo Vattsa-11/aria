@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+<p id="why" hidden style="margin:0;padding:8px 16px;background:#1f222a;color:#9aa0ab;font:13px system-ui"></p>
 <main id="app">
   <header>
     <h1>Aria</h1>
@@ -46,6 +47,19 @@
   <div class="seek"><span id="now">0:00</span><input id="bar" type="range" min="0" max="1000" value="0" aria-label="Seek"><span id="total">0:00</span></div>
   <audio id="audio" preload="auto"></audio>
 </footer>
+<script>
+const why = new URLSearchParams(location.search).get("why");
+if (why && why !== "chosen") {
+  const note = document.getElementById("why");
+  note.hidden = false;
+  note.textContent = `Showing the classic version (${why}). `;
+  const link = document.createElement("a");
+  link.href = "/";
+  link.textContent = "Try the new version again";
+  link.style.color = "#4f8cff";
+  note.append(link);
+}
+</script>
 <script src="/app.js" type="module"></script>
 </body>
 </html>

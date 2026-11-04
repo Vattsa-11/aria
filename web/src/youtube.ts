@@ -71,10 +71,33 @@ export async function search(query: string, limit = 20): Promise<Song[]> {
   return parseSearch(await response.json(), limit);
 }
 
-export async function streamUrl(id: string): Promise<string> {
+const TTL_OK = 25 * 60_000;
+const TTL_REFUSED = 45_000;
+const memory = new Map<string, { url?: string; error?: string; until: number }>();
+
+export function cached(id: string, now = Date.now()): { url?: string; error?: string } | null {
+  const hit = memory.get(id);
+  if (!hit || hit.until <= now) {
+    memory.delete(id);
+    return null;
+  }
+  return hit;
+}
+
+export function remember(id: string, value: { url?: string; error?: string }, now = Date.now()): void {
+  if (memory.size > 500) memory.clear();
+  memory.set(id, { ...value, until: now + (value.url ? TTL_OK : TTL_REFUSED) });
+}
+
+export function forget(id: string): void {
+  memory.delete(id);
+}
+
+async function lookup(id: string): Promise<string> {
   const response = await fetch(PLAYER, {
     method: "POST",
     headers: { "Content-Type": "application/json", "User-Agent": VR_AGENT, "X-YouTube-Client-Name": "28", "X-YouTube-Client-Version": VR_VERSION },
+    signal: AbortSignal.timeout(8000),
     body: JSON.stringify({
       context: { client: { clientName: "ANDROID_VR", clientVersion: VR_VERSION, deviceMake: "Oculus", deviceModel: "Quest 3", androidSdkVersion: 32, osName: "Android", osVersion: "12L", hl: "en", gl: "US" } },
       videoId: id,
@@ -84,4 +107,22 @@ export async function streamUrl(id: string): Promise<string> {
   });
   if (!response.ok) throw new Error(`YouTube answered ${response.status}`);
   return pickAudio(await response.json());
+}
+
+export async function streamUrl(id: string, fresh = false): Promise<string> {
+  if (fresh) forget(id);
+  const hit = cached(id);
+  if (hit) {
+    if (hit.url) return hit.url;
+    throw new Error(hit.error ?? "YouTube refused this video");
+  }
+  try {
+    const url = await lookup(id);
+    remember(id, { url });
+    return url;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "YouTube lookup failed";
+    remember(id, { error: message });
+    throw new Error(message);
+  }
 }

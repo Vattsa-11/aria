@@ -1625,6 +1625,11 @@ impl App {
     }
 
     fn next_is_ready(&mut self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            return true;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         match self.next_preview() {
             None => true,
             Some(next) => {
@@ -1635,7 +1640,22 @@ impl App {
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn web_preload_next(&mut self) {
+        if self.audio_state() != AudioState::Playing || self.position() < 3.0 {
+            return;
+        }
+        if let Some((url, _)) = self.next_preview().as_ref().and_then(crate::jobs::stream_url) {
+            self.player.send(Command::Preload(url));
+        }
+    }
+
     fn maybe_warm_next(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.web_preload_next();
+            return;
+        }
         if self.audio_state() != AudioState::Playing || self.is_offline() || self.position() < WARM_AFTER_SECS {
             return;
         }

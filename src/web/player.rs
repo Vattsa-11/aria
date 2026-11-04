@@ -20,6 +20,7 @@ struct Deck {
     track_id: Option<u64>,
     duration: Option<Duration>,
     loading: bool,
+    preloaded: Option<String>,
 }
 
 struct Graph {
@@ -67,7 +68,7 @@ fn build(volume: f32, events: Sender<Event>, eq: Arc<EqParams>) -> Result<Graph,
         let gain = context.create_gain().map_err(|_| "audio graph")?;
         source.connect_with_audio_node(&gain).map_err(|_| "audio graph")?;
         gain.connect_with_audio_node(&preamp).map_err(|_| "audio graph")?;
-        decks.push(Deck { element, gain, track_id: None, duration: None, loading: false });
+        decks.push(Deck { element, gain, track_id: None, duration: None, loading: false, preloaded: None });
     }
     let mut previous: web_sys::AudioNode = preamp.clone().into();
     for filter in &filters {
@@ -141,13 +142,18 @@ impl Graph {
         let _ = self.context.resume();
         let now = self.context.current_time();
         let crossfade = request.fade > Duration::from_millis(50) && self.is_playing(self.active);
-        let next = if crossfade { 1 - self.active } else { self.active };
+        let idle_ready = self.decks[1 - self.active].preloaded.as_deref() == Some(stream.url.as_str());
+        let next = if crossfade || idle_ready { 1 - self.active } else { self.active };
         let old = self.active;
         let seconds = request.fade.as_secs_f64();
         {
             let deck = &mut self.decks[next];
-            let _ = deck.element.pause();
-            deck.element.set_src(&stream.url);
+            let reuse = deck.preloaded.as_deref() == Some(stream.url.as_str());
+            if !reuse {
+                let _ = deck.element.pause();
+                deck.element.set_src(&stream.url);
+            }
+            deck.preloaded = None;
             deck.element.set_current_time(request.start.as_secs_f64());
             deck.track_id = Some(request.track.id);
             deck.duration = request.duration.or(stream.duration);
@@ -181,6 +187,17 @@ impl Graph {
             }
         }
         self.active = next;
+    }
+
+    fn preload(&mut self, url: String) {
+        let idle = 1 - self.active;
+        let deck = &mut self.decks[idle];
+        if deck.preloaded.as_deref() == Some(url.as_str()) || (deck.track_id.is_some() && !deck.element.paused()) {
+            return;
+        }
+        deck.element.set_src(&url);
+        deck.element.load();
+        deck.preloaded = Some(url);
     }
 
     fn is_playing(&self, index: usize) -> bool {
@@ -222,6 +239,7 @@ impl Graph {
                 let _ = self.context.resume();
                 let _ = self.decks[self.active].element.play();
             }
+            Command::Preload(url) => self.preload(url),
             Command::Seek(to) => self.decks[self.active].element.set_current_time(to.as_secs_f64()),
             Command::SetVolume(volume) => {
                 self.volume = volume;

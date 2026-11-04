@@ -33,9 +33,9 @@ test("picks the best AAC stream and explains refusals", () => {
 });
 
 test("open-ended ranges are bounded so YouTube does not throttle them", () => {
-  assert.equal(boundedRange("bytes=0-"), "bytes=0-1048575");
-  assert.equal(boundedRange(null), "bytes=0-1048575");
+  assert.equal(boundedRange("bytes=0-"), "bytes=0-393215");
+  assert.equal(boundedRange(null), "bytes=0-393215");
   assert.equal(boundedRange("bytes=2000000-"), "bytes=2000000-3048575");
   assert.equal(boundedRange("bytes=10-99"), "bytes=10-99");
-  assert.equal(boundedRange("bytes=0-99999999"), "bytes=0-1048575");
+  assert.equal(boundedRange("bytes=0-99999999"), "bytes=0-393215");
 });

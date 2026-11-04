@@ -229,7 +229,7 @@ pub fn track_context_menu(
 
 pub fn open_menu_on_right_click(ctx: &egui::Context, row: &egui::Response, menu: &egui::Response) {
     let flag = menu.id.with("at-pointer");
-    if row.secondary_clicked() {
+    if row.secondary_clicked() || row.long_touched() {
         ctx.data_mut(|data| data.insert_temp(flag, true));
         egui::Popup::open_id(ctx, egui::Popup::default_response_id(menu));
     } else if menu.clicked() {
@@ -293,6 +293,11 @@ pub fn track_row(
     if response.hovered() && !response.dragged() {
         ui.painter()
             .rect_filled(rect, egui::CornerRadius::same(10), pal.raised);
+    }
+    let (reveal, swiped) = crate::ui::gestures::row_swipe(ui.ctx(), rect, ui.scope_id().with(("row-swipe", index, track.id)));
+    crate::ui::gestures::paint_reveal(ui, rect, reveal, accent);
+    if swiped {
+        crate::ui::gestures::request_queue(ui.ctx(), track.clone());
     }
 
     if let Some(ds) = drag_state.as_mut() {

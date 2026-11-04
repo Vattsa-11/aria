@@ -2,6 +2,8 @@ import * as saavn from "./saavn.ts";
 import * as youtube from "./youtube.ts";
 import { retryAfter, type Namespace } from "./limit.ts";
 import { boundedRange, CHUNK } from "./range.ts";
+import { pickMatch } from "./match.ts";
+import * as lyrics from "./lyrics.ts";
 import { allowedImage, MAX_IMAGE_BYTES } from "./image.ts";
 
 export { RateLimiter } from "./limiter.ts";
@@ -23,7 +25,7 @@ async function proxy(upstream: string, request: Request, extra: Record<string, s
   const range = request.headers.get("range");
   const wanted = bound ? boundedRange(range) : range;
   if (wanted) headers.set("Range", wanted);
-  const response = await fetch(upstream, { headers });
+  const response = await fetch(upstream, { headers, signal: AbortSignal.timeout(10000) });
   const out = new Headers();
   for (const name of COPIED) {
     const value = response.headers.get(name);
@@ -33,6 +35,46 @@ async function proxy(upstream: string, request: Request, extra: Record<string, s
   out.set("accept-ranges", "bytes");
   out.set("cache-control", "private, max-age=600");
   return new Response(response.body, { status: response.status, headers: out });
+}
+
+const standIn = new Map<string, { url: string; until: number }>();
+
+async function youtubeAudio(request: Request, id: string, url: URL): Promise<Response> {
+  const agent = { "User-Agent": youtube.VR_AGENT };
+  for (const fresh of [false, true]) {
+    try {
+      const upstream = await youtube.streamUrl(id, fresh);
+      const response = await proxy(upstream, request, agent, true);
+      if (response.ok) {
+        response.headers.set("x-aria-source", "youtube");
+        return response;
+      }
+      youtube.forget(id);
+      await response.body?.cancel();
+    } catch (error) {
+      if (!fresh && youtube.cached(id)?.error) break;
+    }
+  }
+  const title = url.searchParams.get("t") ?? "";
+  if (title) {
+    try {
+      let stand = standIn.get(id);
+      if (!stand || stand.until < Date.now()) {
+        const artist = url.searchParams.get("a") ?? "";
+        const duration = Number(url.searchParams.get("d") ?? 0) || 0;
+        const match = pickMatch(await saavn.search(`${title} ${artist}`.trim(), 8), title, artist, duration);
+        stand = { url: match ? await saavn.streamUrl(match.id) : "", until: Date.now() + 20 * 60_000 };
+        if (standIn.size > 300) standIn.clear();
+        standIn.set(id, stand);
+      }
+      if (stand.url) {
+        const response = await proxy(stand.url, request, {}, true);
+        response.headers.set("x-aria-source", "jiosaavn");
+        return response;
+      }
+    } catch {}
+  }
+  return json({ error: youtube.cached(id)?.error ?? "YouTube would not provide this song" }, 502);
 }
 
 async function route(request: Request, url: URL): Promise<Response> {
@@ -48,6 +90,15 @@ async function route(request: Request, url: URL): Promise<Response> {
       const language = (url.searchParams.get("lang") ?? "hindi").replace(/[^a-z]/gi, "").slice(0, 20) || "hindi";
       return json(await saavn.trending(language), 200, "public, max-age=900");
     }
+    case "/api/region": {
+      const place = (request as Request & { cf?: { country?: string; region?: string } }).cf;
+      return json({ country_code: place?.country ?? "", region: place?.region ?? "" }, 200, "private, max-age=3600");
+    }
+    case "/api/lyrics": {
+      const title = (url.searchParams.get("t") ?? "").slice(0, 200);
+      const found = title ? await lyrics.find(title, (url.searchParams.get("a") ?? "").slice(0, 200), Number(url.searchParams.get("d") ?? 0) || 0) : null;
+      return json({ lyrics: found }, 200, found ? "public, max-age=86400" : "public, max-age=300");
+    }
     case "/api/image": {
       const target = allowedImage(url.searchParams.get("u") ?? "");
       if (!target) return json({ error: "image host not allowed" }, 400);
@@ -60,7 +111,7 @@ async function route(request: Request, url: URL): Promise<Response> {
     case "/api/audio": {
       const id = url.searchParams.get("id") ?? "";
       if (!ID.test(id)) return json({ error: "bad id" }, 400);
-      if (source === "youtube") return proxy(await youtube.streamUrl(id), request, { "User-Agent": youtube.VR_AGENT }, true);
+      if (source === "youtube") return youtubeAudio(request, id, url);
       return proxy(await saavn.streamUrl(id), request);
     }
     default:

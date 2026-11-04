@@ -120,6 +120,8 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
 
             ui.add_space(12.0);
 
+            #[cfg(not(target_arch = "wasm32"))]
+            {
             section(ui, &pal, "Import");
             card(ui, &pal, |ui| {
                 ui.label(RichText::new("JioSaavn source").size(16.0).color(pal.text));
@@ -156,6 +158,8 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
             });
 
             ui.add_space(12.0);
+
+            }
 
             equalizer_card(app, ui, accent, &pal);
 
@@ -285,16 +289,21 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
                         }
                     });
                 });
-                ui.add_space(10.0);
-                ui.label(
-                    RichText::new(format!("Config: {}", crate::settings::data_dir().display()))
-                        .size(12.5)
-                        .color(pal.muted),
-                );
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    ui.add_space(10.0);
+                    ui.label(
+                        RichText::new(format!("Config: {}", crate::settings::data_dir().display()))
+                            .size(12.5)
+                            .color(pal.muted),
+                    );
+                }
             });
 
             ui.add_space(12.0);
 
+            #[cfg(not(target_arch = "wasm32"))]
+            {
             section(ui, &pal, "Miniplayer");
             card(ui, &pal, |ui| {
                 ui.label(RichText::new("Miniplayer").size(16.0).color(pal.text));
@@ -371,6 +380,10 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
 
             ui.add_space(12.0);
 
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            {
             section(ui, &pal, "Downloads");
             card(ui, &pal, |ui| {
                 ui.label(RichText::new("Download storage").size(16.0).color(pal.text));
@@ -410,6 +423,34 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
 
             ui.add_space(12.0);
 
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                section(ui, &pal, "Install");
+                card(ui, &pal, |ui| {
+                    let state = crate::install::state();
+                    let (headline, hint) = match state.as_str() {
+                        "installed" => ("Aria is installed on this device", "You are using the installed app."),
+                        "available" => ("Install Aria as an app", "Adds Aria to your home screen or desktop and opens it in its own window, even offline."),
+                        "ios" => ("Add Aria to your home screen", "Tap the Share button in Safari, then Add to Home Screen."),
+                        _ => ("Install Aria as an app", "Use your browser menu: Install app, or Add to Home screen."),
+                    };
+                    ui.label(RichText::new(headline).size(16.0).color(pal.text));
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(hint).size(12.5).color(pal.muted));
+                    if state == "available" {
+                        ui.add_space(10.0);
+                        if crate::ui::widgets::pill_button(ui, "Install", true, accent, &pal) {
+                            crate::install::install();
+                        }
+                    }
+                });
+                ui.add_space(12.0);
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            {
             section(ui, &pal, "Updates");
             card(ui, &pal, |ui| {
                 use crate::update::State;
@@ -449,6 +490,8 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
             });
             ui.add_space(12.0);
 
+            }
+
             section(ui, &pal, "About");
             card(ui, &pal, |ui| {
                 ui.label(RichText::new("About").size(16.0).color(pal.text));
@@ -458,18 +501,21 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
                         .size(13.0)
                         .color(pal.muted),
                 );
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(format!("Library: {}", crate::settings::data_dir().display()))
-                        .size(12.5)
-                        .color(pal.muted),
-                );
-                ui.add_space(2.0);
-                ui.label(
-                    RichText::new(format!("Downloads: {}", crate::downloads::dir().display()))
-                        .size(12.5)
-                        .color(pal.muted),
-                );
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!("Library: {}", crate::settings::data_dir().display()))
+                            .size(12.5)
+                            .color(pal.muted),
+                    );
+                    ui.add_space(2.0);
+                    ui.label(
+                        RichText::new(format!("Downloads: {}", crate::downloads::dir().display()))
+                            .size(12.5)
+                            .color(pal.muted),
+                    );
+                }
                 ui.add_space(2.0);
                 ui.label(
                     RichText::new("Errors are written to aria.log in the library folder")
@@ -563,6 +609,8 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
 
             ui.add_space(12.0);
 
+            #[cfg(not(target_arch = "wasm32"))]
+            {
             section(ui, &pal, "Agent mode");
             card(ui, &pal, |ui| {
                 ui.label(RichText::new("Let an agent drive Aria").size(16.0).color(pal.text));
@@ -626,6 +674,10 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
 
             ui.add_space(12.0);
 
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            {
             section(ui, &pal, "YouTube sign-in");
             card(ui, &pal, |ui| {
                 ui.label(RichText::new("Use my browser's YouTube login").size(16.0).color(pal.text));
@@ -665,6 +717,8 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
                     );
                 }
             });
+
+            }
 
             ui.add_space(24.0);
         });

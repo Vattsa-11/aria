@@ -17,6 +17,7 @@ struct Row {
     clicked: bool,
     menu: Response,
     like: Response,
+    rect: Rect,
 }
 
 struct ResultRow<'a> {
@@ -160,6 +161,7 @@ fn result_row(ui: &mut Ui, index: usize, data: ResultRow<'_>) -> Row {
         clicked: response.clicked() && !menu_response.clicked() && !like_response.clicked(),
         menu: menu_response,
         like: like_response,
+        rect,
     }
 }
 
@@ -322,6 +324,11 @@ pub fn search(app: &mut App, ui: &mut Ui) {
                 );
                 if row.clicked {
                     play = Some(index);
+                }
+                let (reveal, swiped) = crate::ui::gestures::row_swipe(ui.ctx(), row.rect, ui.scope_id().with(("result-swipe", index, track.id)));
+                crate::ui::gestures::paint_reveal(ui, row.rect, reveal, accent);
+                if swiped {
+                    crate::ui::gestures::request_queue(ui.ctx(), track.clone());
                 }
                 rows.push(row);
             }
