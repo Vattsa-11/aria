@@ -1,7 +1,8 @@
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use crate::model::{Playlist, Track};
 use crate::queue::Queue;

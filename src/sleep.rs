@@ -1,4 +1,5 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 pub const FADE_SECS: f32 = 5.0;
 

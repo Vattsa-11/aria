@@ -2,7 +2,8 @@ use std::ffi::c_void;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use egui::Context;
 use raw_window_handle::RawWindowHandle;
@@ -2301,8 +2302,8 @@ impl App {
                 let target = (text("viewport").as_deref() == Some("mini")).then(crate::miniplayer::viewport_id);
                 let reply = call.reply.clone();
                 let dir = crate::agent::agent_dir();
-                let stamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                let stamp = web_time::SystemTime::now()
+                    .duration_since(web_time::UNIX_EPOCH)
                     .map(|d| d.as_millis())
                     .unwrap_or(0);
                 let path = dir.join(format!("shot-{stamp}.png"));

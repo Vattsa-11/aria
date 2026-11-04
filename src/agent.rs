@@ -51,8 +51,8 @@ fn random_hex() -> String {
         let mut hasher = state.build_hasher();
         hasher.write_u64(round);
         hasher.write_u128(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            web_time::SystemTime::now()
+                .duration_since(web_time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or(0),
         );

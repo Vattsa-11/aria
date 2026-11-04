@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "build:wasm": "cd .. && wasm-pack build --target web --out-dir web/public/pkg --out-name aria --release",
+    "deploy": "npm run build:wasm && wrangler deploy",
     "check": "tsc",
     "test": "node --test test/saavn.test.ts test/youtube.test.ts test/limit.test.ts"
   },

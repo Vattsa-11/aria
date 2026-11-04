@@ -9,7 +9,7 @@ use std::io::{BufReader, Read, Seek};
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 #[cfg(not(target_arch = "wasm32"))]
-use std::time::Instant;
+use web_time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use rodio::source::Source;
 #[cfg(not(target_arch = "wasm32"))]

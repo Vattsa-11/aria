@@ -189,7 +189,7 @@ mod tests {
     #[test]
     #[ignore = "needs network access to YouTube Music"]
     fn live_radio_returns_a_hundred_unique_tracks() {
-        let started = std::time::Instant::now();
+        let started = web_time::Instant::now();
         let tracks = fetch("KvMY1uzSC1E", 100).expect("live radio");
         println!("{} tracks in {:?}", tracks.len(), started.elapsed());
         assert!(tracks.len() >= 90, "got {}", tracks.len());

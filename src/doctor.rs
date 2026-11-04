@@ -66,7 +66,7 @@ pub fn version_age_days(version: &str, today_days: i64) -> Option<i64> {
 }
 
 pub fn today_days() -> Option<i64> {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    let secs = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).ok()?.as_secs();
     Some((secs / 86_400) as i64)
 }
 

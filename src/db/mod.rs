@@ -113,8 +113,8 @@ pub fn log_play(track: &Track) {
     let Ok(conn) = open() else {
         return;
     };
-    let played_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let played_at = web_time::SystemTime::now()
+        .duration_since(web_time::UNIX_EPOCH)
         .map(|span| span.as_secs() as i64)
         .unwrap_or(0);
     let _ = conn.execute(
@@ -849,8 +849,8 @@ mod tests {
     #[test]
     fn lyrics_are_cached_per_track() {
         crate::settings::test_data_dir();
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let unique = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
             .map(|span| span.subsec_nanos() as u64)
             .unwrap_or(7);
         let id = 900_000_000 + unique;
@@ -885,8 +885,8 @@ mod tests {
     #[test]
     fn features_round_trip_and_replace() {
         crate::settings::test_data_dir();
-        let id = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let id = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(1);
         assert!(load_features(id).is_none());

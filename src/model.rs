@@ -37,8 +37,8 @@ pub struct Playlist {
 impl Playlist {
     pub fn new(name: &str) -> Self {
         Self {
-            id: hash_id(&format!("playlist:{name}:{}", std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            id: hash_id(&format!("playlist:{name}:{}", web_time::SystemTime::now()
+                .duration_since(web_time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or(0))),
             name: name.to_string(),

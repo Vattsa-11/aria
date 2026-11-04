@@ -19,8 +19,8 @@ pub fn log_to(dir: &Path, level: &str, message: &str) {
             let _ = std::fs::remove_file(&path);
         }
     }
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let stamp = web_time::SystemTime::now()
+        .duration_since(web_time::UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0);
     if let Ok(mut file) = std::fs::OpenOptions::new()

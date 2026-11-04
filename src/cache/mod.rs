@@ -1,7 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 
