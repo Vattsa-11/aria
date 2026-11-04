@@ -34,6 +34,7 @@ pub fn store_disk(key: &str, bytes: &[u8]) {
     let _ = std::fs::write(disk_path(key), bytes);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn fetch_bytes(source: &str) -> Result<Vec<u8>, String> {
     use std::io::Read as _;
     if !source.starts_with("http://") && !source.starts_with("https://") {

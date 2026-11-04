@@ -600,6 +600,7 @@ fn download_with(
     find_download(dir, stem).ok_or_else(|| "Download finished but no audio file was written".to_string())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn download_latest() -> Result<PathBuf, String> {
     let destination = local_bin();
     if let Some(parent) = destination.parent() {

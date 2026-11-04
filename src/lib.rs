@@ -8,7 +8,12 @@ mod downloads;
 mod embedded;
 mod net;
 mod equalizer;
+#[cfg(not(target_arch = "wasm32"))]
 mod http;
+#[cfg(target_arch = "wasm32")]
+#[path = "web/http.rs"]
+mod http;
+#[cfg(not(target_arch = "wasm32"))]
 mod httpdl;
 mod import;
 mod jobs;
@@ -17,14 +22,20 @@ mod update;
 mod logs;
 mod lyrics;
 mod matchscore;
+#[cfg(not(target_arch = "wasm32"))]
+mod media_controls;
+#[cfg(target_arch = "wasm32")]
+#[path = "web/media_controls.rs"]
 mod media_controls;
 mod miniplayer;
 mod model;
+#[cfg(not(target_arch = "wasm32"))]
 mod normalize;
 mod pace;
 mod player;
 mod proc;
 mod queue;
+#[cfg(not(target_arch = "wasm32"))]
 mod radio;
 mod region;
 mod settings;
@@ -35,10 +46,14 @@ mod ui;
 mod writer;
 mod ytdlp;
 mod provider;
+#[cfg(not(target_arch = "wasm32"))]
 mod provider_youtube_music;
+#[cfg(not(target_arch = "wasm32"))]
 mod provider_jiosaavn;
+#[cfg(not(target_arch = "wasm32"))]
 mod provider_youtube;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run() -> eframe::Result {
     logs::install_panic_hook();
     if std::env::args().any(|arg| arg == "--stats") {
@@ -65,6 +80,7 @@ fn android_main(app: android_activity::AndroidApp) {
     let _ = run_with(options);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn run_with(options: eframe::NativeOptions) -> eframe::Result {
     let result = eframe::run_native(
         "Aria",
@@ -77,6 +93,7 @@ fn run_with(options: eframe::NativeOptions) -> eframe::Result {
     result
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn preview_size() -> Option<[f32; 2]> {
     let value = std::env::var("ARIA_WINDOW").ok()?;
     let (width, height) = value.split_once('x')?;
@@ -84,6 +101,7 @@ fn preview_size() -> Option<[f32; 2]> {
     ((200.0..=4000.0).contains(&width) && (200.0..=4000.0).contains(&height)).then_some([width, height])
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn native_options() -> eframe::NativeOptions {
     let size = preview_size().unwrap_or([1180.0, 780.0]);
     eframe::NativeOptions {
@@ -100,6 +118,7 @@ fn native_options() -> eframe::NativeOptions {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn window_icon() -> std::sync::Arc<egui::IconData> {
     let decoded = image::load_from_memory(include_bytes!("../assets/icon-256.png"))
         .map(|image| image.to_rgba8());
@@ -111,4 +130,27 @@ fn window_icon() -> std::sync::Arc<egui::IconData> {
         }),
         Err(_) => std::sync::Arc::new(egui::IconData::default()),
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub async fn start(canvas_id: String) -> Result<(), wasm_bindgen::JsValue> {
+    use wasm_bindgen::JsCast;
+    std::panic::set_hook(Box::new(|info| web_sys::console::error_1(&info.to_string().into())));
+    let document = web_sys::window().and_then(|window| window.document()).ok_or("no document")?;
+    let canvas = document
+        .get_element_by_id(&canvas_id)
+        .ok_or("canvas not found")?
+        .dyn_into::<web_sys::HtmlCanvasElement>()
+        .map_err(|_| "not a canvas")?;
+    eframe::WebRunner::new()
+        .start(
+            canvas,
+            eframe::WebOptions::default(),
+            Box::new(|cc| {
+                jobs::set_context(&cc.egui_ctx);
+                Ok(Box::new(app::App::new(cc)))
+            }),
+        )
+        .await
 }

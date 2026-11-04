@@ -142,11 +142,13 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
                             .font(egui::TextStyle::Body),
                     );
                     if response.changed() {
+                        #[cfg(not(target_arch = "wasm32"))]
                         crate::provider_jiosaavn::set_base(&app.settings.jiosaavn_base);
                         app.touch_settings();
                     }
                     if crate::ui::widgets::pill_button(ui, "Reset", false, accent, &pal) {
                         app.settings.jiosaavn_base.clear();
+                        #[cfg(not(target_arch = "wasm32"))]
                         crate::provider_jiosaavn::set_base("");
                         app.touch_settings();
                     }

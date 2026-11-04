@@ -2,8 +2,9 @@ use std::ffi::c_void;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
+pub use souvlaki::MediaControls;
 use souvlaki::{
-    MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition,
+    MediaControlEvent, MediaMetadata, MediaPlayback, MediaPosition,
     PlatformConfig,
 };
 

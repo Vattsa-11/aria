@@ -102,6 +102,7 @@ pub trait Provider: Send + Sync {
     fn resolve(&self, track: &Track) -> Result<Option<ResolvedStream>, String>;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn all_providers() -> Vec<Box<dyn Provider>> {
     vec![
         Box::new(crate::provider_youtube_music::YoutubeMusicProvider::new()),
@@ -110,8 +111,10 @@ pub fn all_providers() -> Vec<Box<dyn Provider>> {
     ]
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(12);
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn resolve_chain(track: &Track) -> Result<ResolvedStream, String> {
     let mut last_err = "No providers available".to_string();
     for provider in all_providers() {
@@ -138,6 +141,7 @@ pub fn resolve_chain(track: &Track) -> Result<ResolvedStream, String> {
     Err(last_err)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn provider_label(track: &Track) -> String {
     track
         .provider_meta

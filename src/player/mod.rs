@@ -1,23 +1,41 @@
-use std::fs::File;
-use std::io::{BufReader, Read, Seek};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Instant;
 use std::time::Duration;
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::fs::File;
+#[cfg(not(target_arch = "wasm32"))]
+use std::io::{BufReader, Read, Seek};
+#[cfg(not(target_arch = "wasm32"))]
+use std::thread;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
 use rodio::source::Source;
+#[cfg(not(target_arch = "wasm32"))]
 use rodio::{Decoder, DeviceSinkBuilder, Player as RodioPlayer};
-
-use crate::equalizer::{EqParams, EqSource};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::equalizer::EqSource;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::normalize::NormalizeSource;
+use crate::equalizer::EqParams;
 use crate::jobs::Event;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::model::TrackSource;
-use crate::ytdlp::ResolvedStream;
+use crate::provider::ResolvedStream;
 use crate::model::Track;
 
+#[cfg(target_arch = "wasm32")]
+#[path = "../web/player.rs"]
+mod web;
+#[cfg(target_arch = "wasm32")]
+pub use web::PlayerHandle;
+
+#[cfg(not(target_arch = "wasm32"))]
 trait AudioSource: Read + Seek + Send + Sync {}
+#[cfg(not(target_arch = "wasm32"))]
 impl AudioSource for BufReader<File> {}
+#[cfg(not(target_arch = "wasm32"))]
 impl AudioSource for crate::http::HttpStream {}
 
 pub struct PlayRequest {
@@ -54,12 +72,13 @@ pub struct Snapshot {
     pub position: Duration,
     pub duration: Option<Duration>,
 }
-
+#[cfg(not(target_arch = "wasm32"))]
 pub struct PlayerHandle {
     tx: Sender<Command>,
     snapshot: Arc<Mutex<Snapshot>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl PlayerHandle {
     pub fn spawn(
         volume: f32,
@@ -94,14 +113,17 @@ impl PlayerHandle {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn lock(snapshot: &Arc<Mutex<Snapshot>>) -> std::sync::MutexGuard<'_, Snapshot> {
     snapshot.lock().unwrap_or_else(|err| err.into_inner())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn set_state(snapshot: &Arc<Mutex<Snapshot>>, state: AudioState) {
     lock(snapshot).state = state;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn run(
     rx: Receiver<Command>,
     snapshot: Arc<Mutex<Snapshot>>,
@@ -320,6 +342,7 @@ fn run(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn build_decoder(
     source: Box<dyn AudioSource>,
     byte_len: Option<u64>,
@@ -351,6 +374,7 @@ pub fn coalesce_play(first: Box<PlayRequest>, queued: Vec<Command>) -> (Box<Play
     (request, others)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Loaded {
     source: Box<dyn AudioSource>,
     duration: Option<Duration>,
@@ -358,6 +382,7 @@ struct Loaded {
     fork: Option<crate::http::HttpStream>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn head_samples(
     mut decoder: Decoder<Box<dyn AudioSource>>,
     seconds: u32,
@@ -391,6 +416,7 @@ fn head_samples(
     (out, rate / factor as u32)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn spawn_analysis(track: &Track, fork: Option<crate::http::HttpStream>, events: Sender<Event>) {
     let id = track.id;
     let local = track.local_path().map(|path| path.to_path_buf());
@@ -413,12 +439,14 @@ fn spawn_analysis(track: &Track, fork: Option<crate::http::HttpStream>, events: 
     });
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn build_streaming_decoder(
     source: Box<dyn AudioSource>,
 ) -> Result<Decoder<Box<dyn AudioSource>>, rodio::decoder::DecoderError> {
     Decoder::builder().with_data(source).with_seekable(false).build()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn swap_to_seekable(
     sink: &RodioPlayer,
     fork: &crate::http::HttpStream,
@@ -445,6 +473,7 @@ fn swap_to_seekable(
     true
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn load_source(
     request: &mut PlayRequest,
 ) -> Result<Loaded, String> {
@@ -490,6 +519,7 @@ fn load_source(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
     use super::*;

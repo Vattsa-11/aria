@@ -98,6 +98,7 @@ fn which_dpkg() -> bool {
     cfg!(target_os = "linux") && crate::proc::command("dpkg").arg("--version").output().is_ok()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn check() -> Result<Release, String> {
     let mut response = crate::http::fetch_agent()
         .get(LATEST)
@@ -113,6 +114,7 @@ pub fn dir() -> PathBuf {
     crate::settings::data_dir().join("updates")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn download(asset: &Asset) -> Result<PathBuf, String> {
     let folder = dir();
     std::fs::create_dir_all(&folder).map_err(|err| err.to_string())?;

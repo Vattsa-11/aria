@@ -49,12 +49,12 @@ pub fn open_folder(path: &std::path::Path) {
     let opener = "open";
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
     let opener = "xdg-open";
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_arch = "wasm32"))]
     {
         let _ = path;
         return;
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
     {
         let _ = command(opener).arg(path).spawn();
     }

@@ -6,7 +6,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(not(target_arch = "wasm32"))]
 use rodio::source::SeekError;
+#[cfg(not(target_arch = "wasm32"))]
 use rodio::Source;
 
 pub const BAND_COUNT: usize = 10;
@@ -269,6 +271,7 @@ impl Biquad {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct EqSource<S> {
     inner: S,
     params: Arc<EqParams>,
@@ -281,6 +284,7 @@ pub struct EqSource<S> {
     channel: usize,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<S: Source> EqSource<S> {
     pub fn new(inner: S, params: Arc<EqParams>) -> Self {
         let channels = inner.channels().get() as usize;
@@ -331,6 +335,7 @@ impl<S: Source> EqSource<S> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<S: Source> Iterator for EqSource<S> {
     type Item = rodio::Sample;
 
@@ -354,6 +359,7 @@ impl<S: Source> Iterator for EqSource<S> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<S: Source> Source for EqSource<S> {
     fn current_span_len(&self) -> Option<usize> {
         self.inner.current_span_len()
@@ -381,6 +387,7 @@ impl<S: Source> Source for EqSource<S> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
     use super::*;

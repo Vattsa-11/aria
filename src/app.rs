@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use egui::Context;
 use raw_window_handle::RawWindowHandle;
 use raw_window_handle::HasWindowHandle;
-use souvlaki::MediaControls;
+use crate::media_controls::MediaControls;
 
 use crate::cache::ThumbnailCache;
 use crate::jobs::{Event, Job, Jobs};
@@ -189,6 +189,7 @@ impl App {
         let mut settings = settings::load();
         theme::apply(&ctx, &settings);
 
+        #[cfg(not(target_arch = "wasm32"))]
         crate::provider_jiosaavn::set_base(&settings.jiosaavn_base);
         crate::ytdlp::set_cookie_browser(settings.ytdlp_cookie_browser.as_deref());
         let jobs = crate::jobs::spawn();
@@ -338,6 +339,7 @@ impl App {
             return;
         }
         self.media_ready = true;
+        #[cfg(not(target_arch = "wasm32"))]
         let hwnd = frame
             .winit_window()
             .and_then(|w| w.window_handle().ok())
@@ -345,6 +347,11 @@ impl App {
                 RawWindowHandle::Win32(win32) => Some(win32.hwnd.get() as *mut c_void),
                 _ => None,
             });
+        #[cfg(target_arch = "wasm32")]
+        let hwnd: Option<*mut c_void> = {
+            let _ = frame;
+            None
+        };
         self.media = media_controls::init(hwnd, self.media_tx.clone());
         self.update_media_track();
     }

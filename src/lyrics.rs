@@ -74,6 +74,7 @@ struct LrcLibHit {
     plain_lyrics: Option<String>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn fetch(track: &Track) -> Result<String, String> {
     let title = clean_title(&track.title);
     let artist = track.artist.trim().to_string();
@@ -133,12 +134,14 @@ fn pick(hit: &LrcLibHit) -> Option<String> {
         .cloned()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn request(url: &str) -> Option<LrcLibHit> {
     let agent = crate::http::fetch_agent();
     let body = agent.get(url).call().ok()?.into_body();
     serde_json::from_reader(body.into_reader()).ok()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn request_list(url: &str) -> Option<Vec<LrcLibHit>> {
     let agent = crate::http::fetch_agent();
     let body = agent.get(url).call().ok()?.into_body();

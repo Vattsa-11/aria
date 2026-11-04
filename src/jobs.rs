@@ -1,10 +1,11 @@
 use std::sync::mpsc::{channel, Receiver, Sender};
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
 use egui::ColorImage;
 
 use crate::model::Track;
-use crate::ytdlp::ResolvedStream;
+use crate::provider::ResolvedStream;
 
 pub enum Job {
     Search {
@@ -122,13 +123,25 @@ pub enum Event {
     },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub type JobTx = Sender<Job>;
+#[cfg(target_arch = "wasm32")]
+pub use web::JobTx;
+
+#[cfg(target_arch = "wasm32")]
+#[path = "web/jobs.rs"]
+mod web;
+#[cfg(target_arch = "wasm32")]
+pub use web::{set_context, spawn};
+
 pub struct Jobs {
-    pub tx: Sender<Job>,
+    pub tx: JobTx,
     pub thumbs: crate::cache::ThumbQueue,
     pub event_tx: Sender<Event>,
     pub rx: Receiver<Event>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn run_download(
     track: &Track,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -156,6 +169,7 @@ fn run_download(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn spawn() -> Jobs {
     let (tx, job_rx) = channel::<Job>();
     let thumbs = crate::cache::ThumbQueue::default();
@@ -212,6 +226,7 @@ pub fn spawn() -> Jobs {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn is_indian_language(query: &str) -> bool {
     query.chars().any(|c| {
         let cp = c as u32;
@@ -228,6 +243,7 @@ fn is_indian_language(query: &str) -> bool {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn provider_search(
     query: &str,
     limit: usize,
@@ -261,6 +277,7 @@ fn provider_search(
     Err(last_err)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn split_query(query: &str) -> (&str, &str) {
     match query.split_once(' ') {
         Some((artist, title)) if !artist.is_empty() => (title, artist),
@@ -268,6 +285,7 @@ fn split_query(query: &str) -> (&str, &str) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn handle(job: Job, event_tx: &Sender<Event>) {
     match job {
         Job::Search {

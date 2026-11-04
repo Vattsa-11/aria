@@ -87,6 +87,7 @@ pub fn parse_geo(json: &Value) -> Result<Geo, String> {
     Ok(Geo { country_code, region })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn fetch_geo() -> Result<Geo, String> {
     let mut response = crate::http::fetch_agent()
         .get("https://ipwho.is/?fields=success,message,country_code,region")
