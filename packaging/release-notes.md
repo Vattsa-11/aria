@@ -4,14 +4,20 @@ Aria is a lightweight, touch-first music player. It plays your local files and s
 
 `yt-dlp` {{YTDLP}} is **bundled** in every download, so streaming works the first time you open the app. Nothing needs to be installed separately.
 
-## New in 1.0.2
+## New in 1.0.3
 
-- **Updates inside the app:** Settings now has an *Updates* card. *Check for updates* looks at the GitHub releases page (Aria also checks when it starts), and *Download and install* fetches the right file for your system and starts it.
-- **Adapts to any window size:** works in small, narrow and short tiled windows. Bottom bars shrink, Search keeps its results visible, and the sidebar scrolls.
-- **Queue and lyrics panels scroll with the mouse wheel and by touch.** The queue shows both the songs you added and the rest of the playlist.
-- **Spotify-style prefetching and Apple Music-style transitions** between songs.
-- **More audio formats for local files:** AIFF, CAF, MKV/WebM audio, MP1/MP2, M4B and more, on top of MP3, FLAC, OGG, M4A/AAC and WAV.
-- Right-click menus on songs, resume the last song on start, a new heart icon, and an optional agent mode for testing.
+- **Aria now runs in your browser too.** The same app, with the same screens, works as an installable web app on phones, tablets and PCs: https://aria-web.sharmamagi0.workers.dev. Your friends can use it without installing anything big, and a change to the app shows up on desktop and web together.
+- **Your Library:** one place for Liked Songs, Downloads, Recently played and your playlists, with filter chips that only appear when you have that kind of content, Recents or A-Z sorting, and a list or grid view.
+- **Editable queue:** *Add songs*, *Clear*, and up and down arrows on every queued song, also on small screens. Swipe a song to the right to add it to the queue.
+- **Gestures for touch screens:** swipe the mini player left or right to change song, swipe it up to open Now Playing, swipe Now Playing down to close it, and long-press a song for its menu.
+- **Album colours:** the mini player and Now Playing screen take their colour from the cover art.
+- **Home:** recommendations are now swipeable rows with a *Show all* option, instead of one long wall of covers.
+- **Smoother playback:** a song that cannot be played is skipped automatically (up to three in a row) when you are playing through a queue.
+- **Colours that follow the music:** the accent colour, player bar and Now Playing screen now adapt to the cover art. You can switch this off in Settings (*Match the song's colours*).
+- **Honest stats:** a play now counts in Stats only after you have listened to half of the song, so skipping through songs no longer inflates your numbers.
+- **Search:** a clear button returns you from results to the starting screen.
+- **Fixes:** the heart on search results now works, the window adapts to very small or short sizes, the sidebar scrolls, and the queue and lyrics panels respond to the mouse wheel.
+- **Data folder change on Linux and macOS:** Aria now stores its library in your user data folder (`~/.local/share/Aria` on Linux, `~/Library/Application Support/Aria` on macOS) instead of the folder it was started from. If you used an older version, copy the `Aria` folder you find next to where you launched it into the new location to keep your library. Windows is unchanged.
 
 ## Trying it on Windows (quickest)
 

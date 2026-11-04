@@ -51,8 +51,23 @@ pub fn palette(variant: ThemeVariant) -> Palette {
     }
 }
 
-pub fn accent(settings: &Settings) -> Color32 {
+static ADAPTIVE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub fn set_adaptive(color: Option<Color32>) {
+    let packed = color.map(|color| 0xFF00_0000 | (color.r() as u32) << 16 | (color.g() as u32) << 8 | color.b() as u32).unwrap_or(0);
+    ADAPTIVE.store(packed, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn fixed_accent(settings: &Settings) -> Color32 {
     Color32::from_rgb(settings.accent[0], settings.accent[1], settings.accent[2])
+}
+
+pub fn accent(settings: &Settings) -> Color32 {
+    let packed = ADAPTIVE.load(std::sync::atomic::Ordering::Relaxed);
+    if packed == 0 {
+        return fixed_accent(settings);
+    }
+    Color32::from_rgb((packed >> 16) as u8, (packed >> 8) as u8, packed as u8)
 }
 
 pub fn accent_hex(settings: &Settings) -> String {

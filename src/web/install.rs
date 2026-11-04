@@ -10,6 +10,20 @@ pub fn state() -> String {
     call("ariaInstallState").and_then(|value| value.as_string()).unwrap_or_else(|| "browser".to_string())
 }
 
+pub fn call_args(name: &str, args: &[wasm_bindgen::JsValue]) {
+    let Some(window) = web_sys::window() else { return };
+    let Ok(function) = js_sys::Reflect::get(&window, &name.into()).and_then(|value| value.dyn_into::<js_sys::Function>().map_err(|_| wasm_bindgen::JsValue::NULL)) else { return };
+    let list = js_sys::Array::new();
+    for arg in args {
+        list.push(arg);
+    }
+    let _ = function.apply(&window, &list);
+}
+
+pub fn take_media() -> String {
+    call("ariaTakeMedia").and_then(|value| value.as_string()).unwrap_or_default()
+}
+
 pub fn call_named(name: &str) {
     let _ = call(name);
 }
@@ -19,6 +33,18 @@ pub fn call_with(name: &str, argument: &str) {
     if let Ok(function) = js_sys::Reflect::get(&window, &name.into()).and_then(|value| value.dyn_into::<js_sys::Function>().map_err(|_| wasm_bindgen::JsValue::NULL)) {
         let _ = function.call1(&window, &argument.into());
     }
+}
+
+pub fn take_back() -> u32 {
+    call("ariaTakeBack").and_then(|value| value.as_f64()).unwrap_or(0.0) as u32
+}
+
+pub fn sync_layers(layers: u32) {
+    call_with("ariaSyncLayers", &layers.to_string());
+}
+
+pub fn arm_exit() {
+    call_named("ariaArmExit");
 }
 
 pub fn update_ready() -> bool {

@@ -21,6 +21,13 @@ pub fn touch_device() -> bool {
     false
 }
 
+pub fn open_url(url: &str) {
+    #[cfg(target_arch = "wasm32")]
+    crate::install::call_with("ariaOpen", url);
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::proc::open_folder(std::path::Path::new(url));
+}
+
 pub fn native_engine() -> bool {
     cfg!(not(target_arch = "wasm32"))
 }

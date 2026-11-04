@@ -122,7 +122,32 @@ impl ThumbQueue {
 
 }
 
-pub fn dominant_color(image: &ColorImage) -> Color32 {
+pub fn accent_color(image: &ColorImage) -> Option<Color32> {
+    let rgb = vivid_rgb(image)?;
+    let high = rgb.iter().cloned().fold(0.0, f32::max);
+    let low = rgb.iter().cloned().fold(255.0, f32::min);
+    if high - low < 25.0 {
+        return None;
+    }
+    let full = [rgb[0] * 255.0 / high, rgb[1] * 255.0 / high, rgb[2] * 255.0 / high];
+    let luma = |c: [f32; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    let mut tone = full;
+    let brightness = luma(tone);
+    if brightness < 150.0 {
+        let towards_white = (150.0 - brightness) / (255.0 - brightness);
+        for channel in &mut tone {
+            *channel += (255.0 - *channel) * towards_white;
+        }
+    } else if brightness > 205.0 {
+        let down = 205.0 / brightness;
+        for channel in &mut tone {
+            *channel *= down;
+        }
+    }
+    Some(Color32::from_rgb(tone[0] as u8, tone[1] as u8, tone[2] as u8))
+}
+
+fn vivid_rgb(image: &ColorImage) -> Option<[f32; 3]> {
     let [width, height] = image.size;
     let step = ((width * height) / 900).max(1);
     let (mut weighted, mut weight, mut plain, mut count) = ([0.0f32; 3], 0.0f32, [0.0f32; 3], 0.0f32);
@@ -139,15 +164,22 @@ pub fn dominant_color(image: &ColorImage) -> Color32 {
         count += 1.0;
     }
     if count == 0.0 {
-        return Color32::from_rgb(40, 40, 48);
+        return None;
     }
-    let rgb = if weight > 1.0 { [weighted[0] / weight, weighted[1] / weight, weighted[2] / weight] } else { [plain[0] / count, plain[1] / count, plain[2] / count] };
+    Some(if weight > 1.0 { [weighted[0] / weight, weighted[1] / weight, weighted[2] / weight] } else { [plain[0] / count, plain[1] / count, plain[2] / count] })
+}
+
+pub fn dominant_color(image: &ColorImage) -> Color32 {
+    let Some(rgb) = vivid_rgb(image) else {
+        return Color32::from_rgb(40, 40, 48);
+    };
     let luma = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
     let scale = if luma > 85.0 { 85.0 / luma } else { 1.0 };
     Color32::from_rgb((rgb[0] * scale) as u8, (rgb[1] * scale) as u8, (rgb[2] * scale) as u8)
 }
 
 pub struct ThumbnailCache {
+    accents: HashMap<u64, Color32>,
     tints: HashMap<u64, Color32>,
     textures: HashMap<u64, TextureHandle>,
     order: VecDeque<u64>,
@@ -159,6 +191,7 @@ pub struct ThumbnailCache {
 impl Default for ThumbnailCache {
     fn default() -> Self {
         Self {
+            accents: HashMap::new(),
             tints: HashMap::new(),
             textures: HashMap::new(),
             order: VecDeque::new(),
@@ -183,9 +216,21 @@ impl ThumbnailCache {
         self.tints.get(&id).copied()
     }
 
+    pub fn accent(&self, id: u64) -> Option<Color32> {
+        self.accents.get(&id).copied()
+    }
+
     pub fn insert(&mut self, id: u64, ctx: &Context, image: ColorImage) {
         if self.tints.len() > 600 {
             self.tints.clear();
+        }
+        if self.accents.len() > 600 {
+            self.accents.clear();
+        }
+        if let Some(accent) = accent_color(&image) {
+            self.accents.insert(id, accent);
+        } else {
+            self.accents.remove(&id);
         }
         self.tints.insert(id, dominant_color(&image));
         let handle = ctx.load_texture(
@@ -230,6 +275,20 @@ impl ThumbnailCache {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_adaptive_accent_is_bright_enough_for_dark_screens_and_skips_grey_covers() {
+        let mut pixels = vec![egui::Color32::from_rgb(20, 20, 24); 64 * 64];
+        for pixel in pixels.iter_mut().take(64 * 30) {
+            *pixel = egui::Color32::from_rgb(120, 20, 30);
+        }
+        let image = egui::ColorImage { size: [64, 64], pixels, source_size: egui::vec2(64.0, 64.0) };
+        let accent = super::accent_color(&image).expect("a red cover has an accent");
+        let luma = 0.2126 * accent.r() as f32 + 0.7152 * accent.g() as f32 + 0.0722 * accent.b() as f32;
+        assert!(accent.r() > accent.g() + 40 && (140.0..=215.0).contains(&luma), "{accent:?} {luma}");
+        let grey = egui::ColorImage { size: [8, 8], pixels: vec![egui::Color32::from_gray(120); 64], source_size: egui::vec2(8.0, 8.0) };
+        assert!(super::accent_color(&grey).is_none());
+    }
+
     #[test]
     fn dominant_color_follows_the_vivid_part_of_a_cover_and_stays_dark_enough_for_white_text() {
         let mut pixels = vec![egui::Color32::from_rgb(235, 235, 235); 64 * 64];

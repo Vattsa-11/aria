@@ -160,7 +160,7 @@ pub fn mini_player(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
         .frame(Frame::new().fill(pal.bg).inner_margin(Margin { left: 10, right: 10, top: 6, bottom: 6 }))
         .show(ui, |ui| {
             let card = ui.max_rect();
-            let tint = app.thumbs.tint(track.id);
+            let tint = app.thumbs.tint(track.id).filter(|_| app.settings.adaptive_color);
             let fill = match tint {
                 Some(tint) if pal.bg.r() < 80 => widgets::mix(pal.raised, tint, 0.9),
                 _ => pal.raised,
@@ -237,7 +237,7 @@ pub fn now_playing(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
             bottom: (12.0 + bottom) as i8,
         }))
         .show(ui, |ui| {
-            if let Some(tint) = app.current.as_ref().and_then(|track| app.thumbs.tint(track.id)).filter(|_| pal.bg.r() < 80) {
+            if let Some(tint) = app.current.as_ref().and_then(|track| app.thumbs.tint(track.id)).filter(|_| pal.bg.r() < 80 && app.settings.adaptive_color) {
                 let screen = ui.ctx().content_rect();
                 widgets::paint_gradient(ui.painter(), screen, widgets::mix(pal.bg, tint, 0.95), pal.bg);
             }

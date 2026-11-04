@@ -206,7 +206,8 @@ pub fn search(app: &mut App, ui: &mut Ui) {
 
     ui.horizontal(|ui| {
 
-        let field_width = (ui.available_width() - 104.0).max(120.0);
+        let showing = app.search_is_showing_results();
+        let field_width = (ui.available_width() - 104.0 - if showing { 54.0 } else { 0.0 }).max(100.0);
         let response = ui.add(
             egui::TextEdit::singleline(&mut app.search.query)
                 .id(search_id)
@@ -227,6 +228,9 @@ pub fn search(app: &mut App, ui: &mut Ui) {
         };
         if pill_button(ui, label, app.search.running, accent, &pal) {
             app.run_search();
+        }
+        if showing && pill_button(ui, "✕", false, accent, &pal) {
+            app.reset_search();
         }
     });
 

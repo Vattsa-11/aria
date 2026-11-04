@@ -41,6 +41,71 @@ if (navigator.storage?.persist) {
   navigator.storage.persist().finally(() => window.ariaStorageRefresh());
   setInterval(() => window.ariaStorageRefresh(), 5000);
 }
+(function () {
+  window.__ariaMedia = [];
+  window.__ariaDuration = 0;
+  const session = "mediaSession" in navigator ? navigator.mediaSession : null;
+  window.ariaMediaTrack = (title, artist, art, duration) => {
+    if (!session) return;
+    window.__ariaDuration = Number(duration) || 0;
+    const artwork = art ? [{ src: new URL("/api/image?u=" + encodeURIComponent(art), location.origin).href, sizes: "512x512" }] : [];
+    try { session.metadata = new MediaMetadata({ title, artist, album: "Aria", artwork }); } catch {}
+  };
+  window.ariaMediaState = (playing, position) => {
+    if (!session) return;
+    session.playbackState = playing ? "playing" : "paused";
+    try {
+      if (window.__ariaDuration > 0) session.setPositionState({ duration: window.__ariaDuration, position: Math.min(Math.max(Number(position) || 0, 0), window.__ariaDuration), playbackRate: 1 });
+    } catch {}
+  };
+  window.ariaMediaStop = () => {
+    if (!session) return;
+    session.playbackState = "none";
+    try { session.metadata = null; } catch {}
+  };
+  if (session) {
+    for (const [name, tag] of [["play", "play"], ["pause", "pause"], ["previoustrack", "previous"], ["nexttrack", "next"], ["stop", "stop"]]) {
+      try { session.setActionHandler(name, () => { window.__ariaMedia.push(tag); window.ariaWake?.(); }); } catch {}
+    }
+    try { session.setActionHandler("seekto", (details) => { window.__ariaMedia.push("seek:" + details.seekTime); window.ariaWake?.(); }); } catch {}
+  }
+  window.ariaTakeMedia = () => { const items = window.__ariaMedia; window.__ariaMedia = []; return items.join(","); };
+})();
+(function () {
+  let depth = 1;
+  let ignore = 0;
+  let back = 0;
+  let atBase = false;
+  let exitTimer = null;
+  try { history.replaceState({ aria: 0 }, ""); history.pushState({ aria: 1 }, ""); } catch {}
+  window.addEventListener("popstate", () => {
+    if (ignore > 0) { ignore--; return; }
+    const to = history.state && typeof history.state.aria === "number" ? history.state.aria : 0;
+    if (to < depth) back += depth - to;
+    depth = to;
+    atBase = to === 0;
+    window.ariaWake?.();
+  });
+  window.ariaTakeBack = () => { const n = back; back = 0; return n; };
+  window.ariaSyncLayers = (layers) => {
+    const target = 1 + Number(layers);
+    if (atBase) {
+      if (target === 1) return;
+      clearTimeout(exitTimer);
+      history.pushState({ aria: 1 }, "");
+      depth = 1;
+      atBase = false;
+    }
+    while (depth < target) { depth++; history.pushState({ aria: depth }, ""); }
+    if (depth > target) { ignore++; history.go(target - depth); depth = target; }
+  };
+  window.ariaArmExit = () => {
+    clearTimeout(exitTimer);
+    exitTimer = setTimeout(() => {
+      if (atBase) { history.pushState({ aria: 1 }, ""); depth = 1; atBase = false; }
+    }, 2500);
+  };
+})();
 let loadedBuild = null;
 window.__ariaUpdate = false;
 async function checkVersion() {
@@ -60,44 +125,30 @@ setInterval(checkVersion, 10 * 60 * 1000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) checkVersion(); });
 window.ariaUpdateReady = () => window.__ariaUpdate === true;
 window.ariaApplyUpdate = () => location.reload();
-window.ariaHaptic = (ms) => { try { navigator.vibrate?.(Number(ms) || 12); } catch {} };
-window.ariaDownload = async (id, url, progress) => {
-  const cache = await caches.open("aria-offline");
-  const parts = [];
-  let done = 0;
-  if (url.startsWith("/api/audio")) {
-    let size = 0;
-    for (;;) {
-      const response = await fetch(url, { headers: { Range: `bytes=${done}-` } });
-      if (response.status !== 206 && response.status !== 200) throw new Error(`Server answered ${response.status}`);
-      const range = response.headers.get("content-range");
-      if (range) size = Number(range.split("/")[1]) || size;
-      const chunk = await response.arrayBuffer();
-      if (chunk.byteLength === 0) break;
-      parts.push(chunk);
-      done += chunk.byteLength;
-      progress(done, size);
-      if (response.status === 200 || (size && done >= size)) break;
-    }
-  } else {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`Server answered ${response.status}`);
-    const size = Number(response.headers.get("content-length")) || 0;
-    const reader = response.body.getReader();
-    for (;;) {
-      const { value, done: finished } = await reader.read();
-      if (finished) break;
-      parts.push(value);
-      done += value.byteLength;
-      progress(done, size);
-    }
-  }
-  if (done < 50000) throw new Error("The download came back empty");
-  const blob = new Blob(parts, { type: "audio/mp4" });
-  await cache.put(new Request(`/offline/${id}`), new Response(blob, { headers: { "content-type": "audio/mp4", "content-length": String(blob.size) } }));
-  window.ariaStorageRefresh?.();
-  return blob.size;
+window.ariaEmbed = (id) => {
+  if (!/^[\w-]{6,20}$/.test(id)) return;
+  document.getElementById("aria-embed")?.remove();
+  const box = document.createElement("div");
+  box.id = "aria-embed";
+  box.style.cssText = "position:fixed;left:12px;right:12px;bottom:96px;max-width:460px;margin:0 auto;z-index:9998;background:#000;border:1px solid #262a33;border-radius:16px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.6)";
+  const bar = document.createElement("div");
+  bar.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#16181e;color:#9aa0ab;font:13px system-ui";
+  bar.textContent = "Playing in the YouTube player";
+  const close = document.createElement("button");
+  close.textContent = "Close";
+  close.style.cssText = "background:#4f8cff;color:#fff;border:0;border-radius:10px;padding:6px 12px;font:600 13px system-ui;cursor:pointer";
+  close.onclick = () => box.remove();
+  bar.append(close);
+  const frame = document.createElement("iframe");
+  frame.src = `https://www.youtube.com/embed/${id}?autoplay=1&playsinline=1&rel=0`;
+  frame.allow = "autoplay; encrypted-media; picture-in-picture; fullscreen";
+  frame.referrerPolicy = "strict-origin-when-cross-origin";
+  frame.style.cssText = "display:block;width:100%;aspect-ratio:16/9;border:0";
+  box.append(bar, frame);
+  document.body.append(box);
 };
+window.ariaOpen = (url) => { try { window.open(url, "_blank", "noopener"); } catch {} };
+window.ariaHaptic = (ms) => { try { navigator.vibrate?.(Number(ms) || 12); } catch {} };
 window.ariaOfflineUrl = async (id) => {
   const cache = await caches.open("aria-offline");
   const response = await cache.match(new Request(`/offline/${id}`));
@@ -133,6 +184,18 @@ canvas{width:100%;height:100%;display:block;touch-action:none;outline:none}
 <canvas id="aria-canvas"></canvas>
 <div id="splash"><img src="/icon-192.png" alt=""><i></i><span id="stage">Starting...</span><a href="/classic">Having trouble? Use the classic version</a></div>
 <script type="module">
+import { downloadAudio } from "/download.js";
+window.ariaDownload = async (id, url, progress) => {
+  let lock = null;
+  try { lock = await navigator.wakeLock?.request("screen"); } catch {}
+  try {
+    const size = await downloadAudio({ id, url, progress, cache: await caches.open("aria-offline") });
+    window.ariaStorageRefresh?.();
+    return size;
+  } finally {
+    try { await lock?.release(); } catch {}
+  }
+};
 const stage = (text) => { const el = document.getElementById("stage"); if (el) el.textContent = text; };
 const classic = (why) => location.replace(`/classic?why=${why}`);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

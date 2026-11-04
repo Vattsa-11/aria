@@ -53,6 +53,7 @@ pub struct Settings {
     pub battery_saver: bool,
     #[serde(default)]
     pub library_grid: bool,
+    pub adaptive_color: bool,
     #[serde(default = "haptics_default")]
     pub haptics: bool,
     pub crossfade: f32,
@@ -105,6 +106,7 @@ impl Default for Settings {
             normalize: false,
             battery_saver: false,
             library_grid: false,
+            adaptive_color: true,
             haptics: true,
             crossfade: 4.0,
             jiosaavn_base: String::new(),

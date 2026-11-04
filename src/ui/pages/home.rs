@@ -58,12 +58,7 @@ pub fn home(app: &mut App, ui: &mut egui::Ui) {
             );
             ui.add_space(2.0);
             ui.label(
-                RichText::new(format!(
-                    "{} tracks · {} playlists · {} downloaded",
-                    app.tracks.len(),
-                    app.playlists.len(),
-                    app.downloads.len()
-                ))
+                RichText::new(counts_line(app.liked.len(), app.tracks.len(), app.playlists.len(), app.downloads.len()))
                 .size(13.0)
                 .color(pal.muted),
             );
@@ -222,6 +217,16 @@ fn quick_picks(app: &App) -> Vec<(Track, PickSource)> {
         picks.push((track.clone(), PickSource::Library(index)));
     }
     picks
+}
+
+fn counts_line(liked: usize, local: usize, playlists: usize, downloads: usize) -> String {
+    let mut parts = vec![format!("{liked} liked")];
+    if local > 0 {
+        parts.push(format!("{local} local"));
+    }
+    parts.push(if playlists == 1 { "1 playlist".to_string() } else { format!("{playlists} playlists") });
+    parts.push(format!("{downloads} downloaded"));
+    parts.join(" · ")
 }
 
 fn greeting() -> &'static str {
@@ -504,6 +509,9 @@ fn track_strip(
         }
     });
     ui.add_space(8.0);
+    for track in tracks.iter().rev() {
+        let _ = app.thumb(track);
+    }
     if expanded {
         ui.horizontal_wrapped(|ui| {
             for (index, track) in tracks.iter().enumerate() {
@@ -623,4 +631,16 @@ fn paint_art(
 ) {
     crate::ui::widgets::paint_cover(ui.painter(), rect, texture.as_ref(), 10, accent, pal);
     let _ = title;
+}
+
+#[cfg(test)]
+mod counts_tests {
+    use super::counts_line;
+
+    #[test]
+    fn the_summary_counts_what_people_actually_collect() {
+        assert_eq!(counts_line(0, 0, 0, 0), "0 liked · 0 playlists · 0 downloaded");
+        assert_eq!(counts_line(3, 0, 1, 2), "3 liked · 1 playlist · 2 downloaded");
+        assert_eq!(counts_line(1, 40, 2, 0), "1 liked · 40 local · 2 playlists · 0 downloaded");
+    }
 }

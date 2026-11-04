@@ -1,5 +1,5 @@
 const CACHE = "aria-shell-v2";
-const SHELL = ["/", "/classic", "/style.css", "/app.js", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/pkg/aria.js", "/pkg/aria_bg.wasm"];
+const SHELL = ["/", "/classic", "/style.css", "/app.js", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/download.js", "/pkg/aria.js", "/pkg/aria_bg.wasm"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));

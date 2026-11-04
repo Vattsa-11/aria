@@ -173,6 +173,10 @@ pub struct App {
     pub mini: crate::miniplayer::MiniState,
     play_gen: u64,
     pub adding_songs: bool,
+    listen: crate::listen::ListenMeter,
+    listen_clock: Option<Instant>,
+    #[cfg(target_arch = "wasm32")]
+    last_layers: u32,
     skip_on_fail: bool,
     skip_streak: u8,
 
@@ -319,6 +323,10 @@ impl App {
             mini: crate::miniplayer::MiniState::default(),
             play_gen: 0,
             adding_songs: false,
+            listen: crate::listen::ListenMeter::default(),
+            listen_clock: None,
+            #[cfg(target_arch = "wasm32")]
+            last_layers: 0,
             skip_on_fail: false,
             skip_streak: 0,
             resolving: false,
@@ -529,6 +537,7 @@ impl App {
         self.remember_previous(track.id);
         self.current = Some(track.clone());
         self.current_origin = Some(origin);
+        self.listen.start(track.id);
         self.play_gen += 1;
         self.record_history(&track);
         let duration = track.duration;
@@ -618,6 +627,67 @@ impl App {
     pub fn play_advance(&mut self, automatic: bool) {
         self.play_advance_inner(automatic);
         self.skip_on_fail = true;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn layer_count(&self) -> u32 {
+        let page = match self.page {
+            Page::Home => 0,
+            Page::PlaylistDetail(_) => 2,
+            _ => 1,
+        };
+        let search = (self.page == Page::Search && self.search_is_showing_results()) as u32;
+        page + search + self.adding_songs as u32 + self.lyrics_open as u32 + self.queue_open as u32 + self.now_playing_open as u32
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn go_back(&mut self) -> bool {
+        if self.adding_songs {
+            self.adding_songs = false;
+        } else if self.lyrics_open {
+            self.lyrics_open = false;
+        } else if self.queue_open {
+            self.queue_open = false;
+        } else if self.now_playing_open {
+            self.now_playing_open = false;
+        } else if self.page == Page::Search && self.search_is_showing_results() {
+            self.reset_search();
+        } else if matches!(self.page, Page::PlaylistDetail(_)) {
+            self.page = Page::Playlists;
+        } else if self.page != Page::Home {
+            self.page = Page::Home;
+        } else {
+            return false;
+        }
+        true
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn sync_history(&mut self) {
+        let back = crate::install::take_back();
+        for _ in 0..back {
+            if !self.go_back() {
+                self.notify("Swipe back again to exit");
+                crate::install::arm_exit();
+            }
+        }
+        let layers = self.layer_count();
+        if back > 0 || layers != self.last_layers {
+            crate::install::sync_layers(layers);
+            self.last_layers = layers;
+        }
+    }
+
+    pub fn search_is_showing_results(&self) -> bool {
+        self.search.started || !self.search.results.is_empty()
+    }
+
+    pub fn reset_search(&mut self) {
+        self.search.query.clear();
+        self.search.results.clear();
+        self.search.started = false;
+        self.search.running = false;
+        self.search.error = None;
     }
 
     pub fn begin_adding_songs(&mut self) {
@@ -1253,8 +1323,6 @@ impl App {
         if self.history.len() > 200 {
             self.history.truncate(200);
         }
-        crate::db::log_play(track);
-        self.stats_dirty = true;
         self.persist_history();
     }
 
@@ -2502,7 +2570,14 @@ impl App {
     }
 
     fn flush_settings(&mut self) {
-        if !self.settings_dirty || self.settings_saved_at.elapsed() < Duration::from_millis(600) {
+        if !self.settings_dirty {
+            return;
+        }
+        let wait = Duration::from_millis(600);
+        if self.settings_saved_at.elapsed() < wait {
+            if let Some(ctx) = &self.ctx {
+                ctx.request_repaint_after(wait);
+            }
             return;
         }
         self.settings_dirty = false;
@@ -2629,7 +2704,21 @@ impl App {
         self.play_advance(true);
     }
 
+    fn count_listening(&mut self) {
+        let now = Instant::now();
+        let gap = self.listen_clock.replace(now).map(|before| now.duration_since(before).as_secs_f64()).unwrap_or(0.0);
+        let Some(track) = self.current.clone() else {
+            return;
+        };
+        let playing = self.is_playing();
+        if self.listen.tick(track.id, playing, gap, self.duration()) {
+            crate::db::log_play(&track);
+            self.stats_dirty = true;
+        }
+    }
+
     pub fn tick(&mut self) {
+        self.count_listening();
         self.update_sleep_timer();
         self.maybe_crossfade();
         self.prefetch_playback_art();
@@ -2769,6 +2858,7 @@ impl App {
                         }
                         Err(message) => {
                             self.skip_streak = 0;
+                            self.player.send(Command::Stop);
                             let title = track.title.clone();
                             self.fail(
                                 format!("Cannot play {title}: {message}"),
@@ -3145,6 +3235,11 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let agent_ctx = ui.ctx().clone();
         self.poll_agent(&agent_ctx);
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.sync_history();
+            media_controls::pump();
+        }
 
         if self.busy() || self.audio_state() == AudioState::Loading {
             let interval = if self.settings.battery_saver { 250 } else { 80 };

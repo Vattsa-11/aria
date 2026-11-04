@@ -24,8 +24,19 @@ use crate::ui::widgets::{
     icon_button, primary_icon_button, seek_bar, toggle_icon_button,
 };
 
+fn adaptive_accent(app: &App, ctx: &egui::Context) -> Option<Color32> {
+    if !app.settings.adaptive_color {
+        return None;
+    }
+    let base = theme::fixed_accent(&app.settings);
+    let goal = app.current.as_ref().and_then(|track| app.thumbs.accent(track.id)).unwrap_or(base);
+    let step = |channel: u8, which: u8| ctx.animate_value_with_time(egui::Id::NULL.with(("aria.adaptive-accent", which)), channel as f32, 0.6).round().clamp(0.0, 255.0) as u8;
+    Some(Color32::from_rgb(step(goal.r(), 0), step(goal.g(), 1), step(goal.b(), 2)))
+}
+
 pub fn root(app: &mut App, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
+    theme::set_adaptive(adaptive_accent(app, &ctx));
     let accent = theme::accent(&app.settings);
     let pal = theme::palette(app.settings.theme);
     let window_width = ui.max_rect().width();
@@ -1526,25 +1537,43 @@ fn toast(ctx: &egui::Context, app: &mut App, accent: Color32, pal: &Palette) {
     };
     let retryable = app.toast_action.is_some();
     let mut retry = false;
+    let open_url = if message.contains("not allowing") {
+        app.current.as_ref().and_then(|track| track.yt_id()).map(|id| format!("https://music.youtube.com/watch?v={id}"))
+    } else {
+        None
+    };
     egui::Area::new(app.toast_id)
         .anchor(Align2::CENTER_BOTTOM, Vec2::new(0.0, -(ctx.content_rect().height() * 0.25).clamp(60.0, 150.0)))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
-            ui.set_max_width((ctx.content_rect().width() - 32.0).max(120.0));
+            let outer = (ctx.content_rect().width() - 24.0).clamp(160.0, 420.0);
             Frame::new()
                 .fill(pal.raised)
                 .corner_radius(CornerRadius::same(12))
                 .stroke(Stroke::new(1.0, pal.line))
                 .inner_margin(Margin::symmetric(16, 11))
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(RichText::new(message).size(13.5).color(pal.text)).wrap());
-                        if retryable
-                            && crate::ui::widgets::pill_button(ui, "Retry", false, accent, pal)
-                        {
-                            retry = true;
-                        }
-                    });
+                    ui.set_width(outer - 32.0);
+                    ui.add(egui::Label::new(RichText::new(message).size(13.5).color(pal.text)).wrap());
+                    if retryable || open_url.is_some() {
+                        ui.add_space(8.0);
+                        ui.horizontal_wrapped(|ui| {
+                            if retryable && crate::ui::widgets::pill_button(ui, "Retry", false, accent, pal) {
+                                retry = true;
+                            }
+                            if let Some(url) = &open_url {
+                                #[cfg(target_arch = "wasm32")]
+                                if let Some(id) = url.rsplit('=').next() {
+                                    if crate::ui::widgets::pill_button(ui, "Play in app", true, accent, pal) {
+                                        crate::install::call_with("ariaEmbed", id);
+                                    }
+                                }
+                                if crate::ui::widgets::pill_button(ui, "Open in YouTube", false, accent, pal) {
+                                    crate::platform::open_url(url);
+                                }
+                            }
+                        });
+                    }
                 });
         });
     if retry {

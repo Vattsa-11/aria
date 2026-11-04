@@ -28,7 +28,7 @@ async function proxy(upstream: string, request: Request, extra: Record<string, s
   const range = request.headers.get("range");
   const wanted = bound ? boundedRange(range) : range;
   if (wanted) headers.set("Range", wanted);
-  const response = await fetch(upstream, { headers, signal: AbortSignal.timeout(10000) });
+  const response = await fetch(upstream, { headers, signal: AbortSignal.timeout(25000) });
   const out = new Headers();
   for (const name of COPIED) {
     const value = response.headers.get(name);

@@ -17,6 +17,7 @@ mod http;
 mod httpdl;
 mod import;
 mod jobs;
+mod listen;
 mod live;
 mod update;
 mod logs;

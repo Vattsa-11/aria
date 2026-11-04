@@ -33,6 +33,25 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
                         .size(13.0)
                         .color(pal.muted),
                 );
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Match the song's colours").size(13.5).color(pal.text));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if crate::ui::widgets::toggle_switch(ui, app.settings.adaptive_color, accent, &pal) {
+                            app.settings.adaptive_color = !app.settings.adaptive_color;
+                            app.touch_settings();
+                        }
+                    });
+                });
+                ui.label(
+                    RichText::new(if app.settings.adaptive_color {
+                        "The accent, player bar and Now Playing screen follow the cover art. Your chosen colour below is used when there is no cover."
+                    } else {
+                        "Using the colour you pick below."
+                    })
+                    .size(12.0)
+                    .color(pal.muted),
+                );
                 ui.add_space(12.0);
                 if swatches(app, ui, &pal) {
                     app.reload_theme();
