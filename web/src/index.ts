@@ -1,8 +1,14 @@
 import * as saavn from "./saavn.ts";
 import * as youtube from "./youtube.ts";
 
-interface Env {
+interface Limiter {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
+}
+
+export interface Env {
   ASSETS: Fetcher;
+  SEARCH_LIMIT?: Limiter;
+  AUDIO_LIMIT?: Limiter;
 }
 
 const ID = /^[\w-]{3,40}$/;
@@ -38,6 +44,17 @@ async function proxy(upstream: string, request: Request, extra: Record<string, s
   return new Response(response.body, { status: response.status, headers: out });
 }
 
+export async function limited(env: Env, request: Request, pathname: string): Promise<boolean> {
+  const limiter = pathname === "/api/audio" ? env.AUDIO_LIMIT : env.SEARCH_LIMIT;
+  if (!limiter) return false;
+  const client = request.headers.get("cf-connecting-ip") ?? "unknown";
+  try {
+    return !(await limiter.limit({ key: `${client}:${pathname}` })).success;
+  } catch {
+    return false;
+  }
+}
+
 async function route(request: Request, url: URL): Promise<Response> {
   const source = url.searchParams.get("source") === "youtube" ? "youtube" : "jiosaavn";
   switch (url.pathname) {
@@ -67,6 +84,11 @@ export default {
     const url = new URL(request.url);
     if (!url.pathname.startsWith("/api/")) return env.ASSETS.fetch(request);
     if (request.method !== "GET" && request.method !== "HEAD") return json({ error: "method not allowed" }, 405);
+    if (await limited(env, request, url.pathname)) {
+      const response = json({ error: "Too many requests, try again in a minute" }, 429);
+      response.headers.set("retry-after", "60");
+      return response;
+    }
     try {
       return await route(request, url);
     } catch (error) {
