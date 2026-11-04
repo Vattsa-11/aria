@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Aria</title>
+<meta name="theme-color" content="#0e0f13">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main id="app">
+  <header>
+    <h1>Aria</h1>
+    <form id="search" role="search">
+      <input id="q" type="search" placeholder="Search songs" autocomplete="off" enterkeyhint="search">
+      <button type="submit">Search</button>
+    </form>
+    <div class="chips" id="sources">
+      <button class="chip on" data-source="jiosaavn">JioSaavn</button>
+      <button class="chip" data-source="youtube">YouTube</button>
+      <select id="lang" aria-label="Trending language">
+        <option value="hindi">Hindi</option>
+        <option value="tamil">Tamil</option>
+        <option value="telugu">Telugu</option>
+        <option value="malayalam">Malayalam</option>
+        <option value="kannada">Kannada</option>
+        <option value="punjabi">Punjabi</option>
+        <option value="english">English</option>
+      </select>
+    </div>
+  </header>
+  <p id="status" role="status"></p>
+  <ul id="list"></ul>
+</main>
+<footer id="player" hidden>
+  <img id="cover" alt="">
+  <div class="meta"><strong id="title"></strong><span id="artist"></span></div>
+  <div class="controls">
+    <button id="prev" aria-label="Previous">&#9198;</button>
+    <button id="toggle" class="play" aria-label="Play or pause">&#9654;</button>
+    <button id="next" aria-label="Next">&#9197;</button>
+  </div>
+  <div class="seek"><span id="now">0:00</span><input id="bar" type="range" min="0" max="1000" value="0" aria-label="Seek"><span id="total">0:00</span></div>
+  <audio id="audio" preload="auto"></audio>
+</footer>
+<script src="/app.js" type="module"></script>
+</body>
+</html>
