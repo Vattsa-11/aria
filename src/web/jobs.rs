@@ -15,7 +15,7 @@ pub fn set_context(ctx: &egui::Context) {
     let _ = CONTEXT.set(ctx.clone());
 }
 
-fn wake() {
+pub fn wake() {
     if let Some(ctx) = CONTEXT.get() {
         ctx.request_repaint();
     }

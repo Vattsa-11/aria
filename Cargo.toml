@@ -48,7 +48,7 @@ sqlite-wasm-rs = { version = "0.6", features = ["wasm-bindgen"] }
 sqlite-wasm-vfs = "0.2"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "Navigator", "HtmlCanvasElement", "HtmlAudioElement", "Storage", "Response", "Request", "Headers", "console"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "Navigator", "AudioContext", "AudioContextState", "AudioDestinationNode", "AudioNode", "AudioParam", "BiquadFilterNode", "BiquadFilterType", "GainNode", "MediaElementAudioSourceNode", "HtmlMediaElement", "MediaError", "EventTarget", "Event", "HtmlCanvasElement", "HtmlAudioElement", "Storage", "Response", "Request", "Headers", "console"] }
 js-sys = "0.3"
 
 [target.'cfg(not(any(target_os = "android", target_arch = "wasm32")))'.dependencies]

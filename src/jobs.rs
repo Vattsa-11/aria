@@ -132,7 +132,7 @@ pub use web::JobTx;
 #[path = "web/jobs.rs"]
 mod web;
 #[cfg(target_arch = "wasm32")]
-pub use web::{set_context, spawn};
+pub use web::{set_context, spawn, wake};
 
 pub struct Jobs {
     pub tx: JobTx,

@@ -23,7 +23,7 @@ pub const MAX_GAIN: f32 = 12.0;
 pub const MIN_PREAMP: f32 = -12.0;
 pub const MAX_PREAMP: f32 = 12.0;
 
-const BAND_Q: f32 = 1.3;
+pub const BAND_Q: f32 = 1.3;
 
 pub struct Preset {
     pub name: &'static str,
@@ -195,11 +195,11 @@ impl EqParams {
         self.version.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn version(&self) -> u64 {
+    pub fn version(&self) -> u64 {
         self.version.load(Ordering::Relaxed)
     }
 
-    fn snapshot(&self) -> (bool, f32, [f32; BAND_COUNT]) {
+    pub fn snapshot(&self) -> (bool, f32, [f32; BAND_COUNT]) {
         let mut gains = [0.0f32; BAND_COUNT];
         for (band, slot) in gains.iter_mut().enumerate() {
             *slot = f32::from_bits(self.gains[band].load(Ordering::Relaxed));
