@@ -461,8 +461,11 @@ fn track_card(
     actions: &mut Vec<Action>,
     play: fn(usize) -> Action,
 ) {
-    let texture = app.thumb(track);
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, width + 46.0), Sense::click());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let texture = app.thumb(track);
     if response.is_pointer_button_down_on() {
         ui.painter().rect_filled(rect.expand(4.0), egui::CornerRadius::same(12), pal.raised);
     } else if response.hovered() {

@@ -791,6 +791,18 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
 }
 
 fn equalizer_card(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
+    if crate::platform::touch_device() && !crate::platform::native_engine() {
+        card(ui, pal, |ui| {
+            ui.label(RichText::new("Equalizer and crossfade").size(16.0).color(pal.text));
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("These are available on desktop browsers and in the desktop app. On phones Aria plays through the normal audio path instead, so music keeps playing when you minimise the app or lock the screen.")
+                    .size(12.5)
+                    .color(pal.muted),
+            );
+        });
+        return;
+    }
     card(ui, pal, |ui| {
         ui.horizontal(|ui| {
             ui.label(RichText::new("Equalizer").size(16.0).color(pal.text));

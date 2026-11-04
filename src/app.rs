@@ -3232,6 +3232,16 @@ pub fn effective_state(audio: AudioState, resolving: bool) -> AudioState {
 }
 
 impl eframe::App for App {
+    fn logic(&mut self, _ctx: &egui::Context, frame: &mut eframe::Frame) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.sync_history();
+            media_controls::pump();
+        }
+        self.tick();
+        self.ensure_media(frame);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let agent_ctx = ui.ctx().clone();
         self.poll_agent(&agent_ctx);

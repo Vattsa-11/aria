@@ -107,9 +107,9 @@ pub fn paint_reveal(ui: &Ui, rect: Rect, reveal: f32, accent: Color32) {
 }
 
 pub fn horizontal_drag(ctx: &Context, rect: Rect, key: Id) -> f32 {
-    let (pressed, down, now, delta) = ctx.input(|input| (input.pointer.primary_pressed(), input.pointer.primary_down(), input.pointer.latest_pos(), input.pointer.delta()));
+    let (pressed, down, now, delta, origin_now) = ctx.input(|input| (input.pointer.primary_pressed(), input.pointer.primary_down(), input.pointer.latest_pos(), input.pointer.delta(), input.pointer.press_origin()));
     if pressed {
-        if let Some(position) = now.filter(|position| rect.contains(*position)) {
+        if let Some(position) = origin_now.or(now).filter(|position| rect.contains(*position)) {
             ctx.data_mut(|data| data.insert_temp(key, (position, 0u8)));
         }
     }

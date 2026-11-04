@@ -35,6 +35,7 @@ struct Graph {
     volume: f32,
     events: Sender<Event>,
     embed: Option<Embed>,
+    plain: bool,
 }
 
 struct Embed {
@@ -68,6 +69,7 @@ fn wake_up() {
 }
 
 fn build(volume: f32, events: Sender<Event>, eq: Arc<EqParams>) -> Result<Graph, String> {
+    let plain = crate::platform::touch_device();
     let context = AudioContext::new().map_err(|_| "Audio is not available in this browser".to_string())?;
     let master = context.create_gain().map_err(|_| "audio graph")?;
     master.gain().set_value(volume);
@@ -85,10 +87,14 @@ fn build(volume: f32, events: Sender<Event>, eq: Arc<EqParams>) -> Result<Graph,
         let element = HtmlAudioElement::new().map_err(|_| "audio element")?;
         element.set_preload("auto");
         element.set_cross_origin(Some("anonymous"));
-        let source = context.create_media_element_source(&element).map_err(|_| "audio source")?;
         let gain = context.create_gain().map_err(|_| "audio graph")?;
-        source.connect_with_audio_node(&gain).map_err(|_| "audio graph")?;
-        gain.connect_with_audio_node(&preamp).map_err(|_| "audio graph")?;
+        if plain {
+            element.set_volume(volume.clamp(0.0, 1.0) as f64);
+        } else {
+            let source = context.create_media_element_source(&element).map_err(|_| "audio source")?;
+            source.connect_with_audio_node(&gain).map_err(|_| "audio graph")?;
+            gain.connect_with_audio_node(&preamp).map_err(|_| "audio graph")?;
+        }
         decks.push(Deck { element, gain, track_id: None, duration: None, loading: false, preloaded: None });
     }
     let mut previous: web_sys::AudioNode = preamp.clone().into();
@@ -99,7 +105,7 @@ fn build(volume: f32, events: Sender<Event>, eq: Arc<EqParams>) -> Result<Graph,
     previous.connect_with_audio_node(&master).map_err(|_| "audio graph")?;
     master.connect_with_audio_node(&context.destination()).map_err(|_| "audio graph")?;
     let [first, second]: [Deck; 2] = decks.try_into().map_err(|_| "audio decks")?;
-    let mut graph = Graph { context, decks: [first, second], filters, preamp, master, active: 0, eq, eq_version: 0, volume, events, embed: None };
+    let mut graph = Graph { context, decks: [first, second], filters, preamp, master, active: 0, eq, eq_version: 0, volume, events, embed: None, plain };
     graph.sync_eq();
     for index in 0..2 {
         graph.listen(index);
@@ -153,6 +159,16 @@ impl Graph {
         let param = gain.gain();
         let _ = param.cancel_scheduled_values(now);
         let _ = param.set_value_curve_at_time(&mut curve, now, seconds.max(0.05));
+    }
+
+    fn set_output_volume(&mut self, volume: f32) {
+        if self.plain {
+            for deck in &self.decks {
+                deck.element.set_volume(volume.clamp(0.0, 1.0) as f64);
+            }
+        } else {
+            self.master.gain().set_value(volume);
+        }
     }
 
     fn stop_embed(&mut self) {
@@ -218,9 +234,11 @@ impl Graph {
             return;
         }
         self.stop_embed();
-        let _ = self.context.resume();
+        if !self.plain {
+            let _ = self.context.resume();
+        }
         let now = self.context.current_time();
-        let crossfade = request.fade > Duration::from_millis(50) && self.is_playing(self.active);
+        let crossfade = !self.plain && request.fade > Duration::from_millis(50) && self.is_playing(self.active);
         let idle_ready = self.decks[1 - self.active].preloaded.as_deref() == Some(stream.url.as_str());
         let next = if crossfade || idle_ready { 1 - self.active } else { self.active };
         let old = self.active;
@@ -331,7 +349,7 @@ impl Graph {
                 }
                 Command::SetVolume(volume) => {
                     self.volume = *volume;
-                    self.master.gain().set_value(*volume);
+                    self.set_output_volume(*volume);
                     crate::install::call_with("ariaYTVolume", &format!("{}", (volume * 100.0).round()));
                     return;
                 }
@@ -348,14 +366,16 @@ impl Graph {
                 let _ = self.decks[self.active].element.pause();
             }
             Command::Resume => {
-                let _ = self.context.resume();
+                if !self.plain {
+                    let _ = self.context.resume();
+                }
                 let _ = self.decks[self.active].element.play();
             }
             Command::Preload(url) => self.preload(url),
             Command::Seek(to) => self.decks[self.active].element.set_current_time(to.as_secs_f64()),
             Command::SetVolume(volume) => {
                 self.volume = volume;
-                self.master.gain().set_value(volume);
+                self.set_output_volume(volume);
             }
             Command::Stop => {
                 for deck in &mut self.decks {
