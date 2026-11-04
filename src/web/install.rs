@@ -21,6 +21,10 @@ pub fn call_with(name: &str, argument: &str) {
     }
 }
 
+pub fn haptic() {
+    call_with("ariaHaptic", "14");
+}
+
 pub fn install() {
     let _ = call("ariaInstall");
 }

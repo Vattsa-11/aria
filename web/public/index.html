@@ -41,6 +41,7 @@ if (navigator.storage?.persist) {
   navigator.storage.persist().finally(() => window.ariaStorageRefresh());
   setInterval(() => window.ariaStorageRefresh(), 5000);
 }
+window.ariaHaptic = (ms) => { try { navigator.vibrate?.(Number(ms) || 12); } catch {} };
 window.ariaDownload = async (id, url, progress) => {
   const cache = await caches.open("aria-offline");
   const parts = [];

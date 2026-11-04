@@ -768,6 +768,7 @@ impl App {
     }
 
     pub fn add_to_queue(&mut self, track: Track) {
+        self.haptic();
         self.queue.push_user(track);
         self.notify("Added to queue");
         self.persist(true);
@@ -1456,7 +1457,13 @@ impl App {
         self.current.as_ref().map(|t| self.is_liked(t.id)).unwrap_or(false)
     }
 
+    fn haptic(&self) {
+        #[cfg(target_arch = "wasm32")]
+        crate::install::haptic();
+    }
+
     pub fn toggle_like_track(&mut self, track: &Track) {
+        self.haptic();
         if self.is_liked(track.id) {
             self.liked.retain(|t| t.id != track.id);
             self.notify("Removed from Liked Songs");
