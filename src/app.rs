@@ -1645,7 +1645,7 @@ impl App {
         if self.audio_state() != AudioState::Playing || self.position() < 3.0 {
             return;
         }
-        if let Some((url, _)) = self.next_preview().as_ref().and_then(crate::jobs::stream_url) {
+        if let Some(url) = self.next_preview().as_ref().and_then(crate::jobs::peek_url) {
             self.player.send(Command::Preload(url));
         }
     }

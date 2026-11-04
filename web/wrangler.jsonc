@@ -2,8 +2,8 @@
   "name": "aria-web",
   "main": "src/index.ts",
   "compatibility_date": "2025-09-01",
-  "durable_objects": { "bindings": [{ "name": "LIMITER", "class_name": "RateLimiter" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RateLimiter"] }],
+  "durable_objects": { "bindings": [{ "name": "LIMITER", "class_name": "RateLimiter" }, { "name": "STORE", "class_name": "EdgeStore" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RateLimiter"] }, { "tag": "v2", "new_sqlite_classes": ["EdgeStore"] }],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",

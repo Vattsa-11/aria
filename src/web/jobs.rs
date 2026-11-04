@@ -148,19 +148,48 @@ pub fn tracks_from(json: &Value) -> Vec<Track> {
         .unwrap_or_default()
 }
 
-pub fn stream_url(track: &Track) -> Option<(String, ProviderName)> {
+thread_local! {
+    static RESOLVED: RefCell<std::collections::HashMap<u64, (String, ProviderName)>> = RefCell::new(std::collections::HashMap::new());
+}
+
+fn resolve_path(track: &Track) -> Option<String> {
     let provider = track.provider_meta.as_ref().map(|meta| meta.provider)?;
     let id = match &track.source {
         crate::model::TrackSource::Yt { id } => id.clone(),
         crate::model::TrackSource::Jiosaavn { id } => id.clone(),
         crate::model::TrackSource::Local(_) => return None,
     };
-    let mut path = format!("/api/audio?source={}&id={}", source_of(Some(provider)), encode(&id));
-    if provider != ProviderName::Jiosaavn {
-        let seconds = track.duration.map(|duration| duration.as_secs()).unwrap_or(0);
-        path.push_str(&format!("&t={}&a={}&d={}", encode(&track.title), encode(track.display_artist()), seconds));
+    let seconds = track.duration.map(|duration| duration.as_secs()).unwrap_or(0);
+    Some(format!("/api/resolve?source={}&id={}&t={}&a={}&d={}", source_of(Some(provider)), encode(&id), encode(&track.title), encode(track.display_artist()), seconds))
+}
+
+async fn resolve_url(track: &Track) -> Result<(String, ProviderName), String> {
+    if let Some(hit) = RESOLVED.with(|map| map.borrow().get(&track.id).cloned()) {
+        return Ok(hit);
     }
-    Some((path, provider))
+    let path = resolve_path(track).ok_or("This track cannot be streamed in the browser")?;
+    let json = get_json(&path).await?;
+    let url = json["url"].as_str().ok_or("No playable source found for this song")?.to_string();
+    let provider = if json["source"].as_str() == Some("jiosaavn") { ProviderName::Jiosaavn } else { ProviderName::YoutubeMusic };
+    RESOLVED.with(|map| {
+        let mut map = map.borrow_mut();
+        if map.len() > 200 {
+            map.clear();
+        }
+        map.insert(track.id, (url.clone(), provider));
+    });
+    Ok((url, provider))
+}
+
+pub fn peek_url(track: &Track) -> Option<String> {
+    if let Some((url, _)) = RESOLVED.with(|map| map.borrow().get(&track.id).cloned()) {
+        return Some(url);
+    }
+    let track = track.clone();
+    spawn_local(async move {
+        let _ = resolve_url(&track).await;
+    });
+    None
 }
 
 async fn run(job: Job, events: Sender<Event>) {
@@ -182,10 +211,7 @@ async fn run(job: Job, events: Sender<Event>) {
             emit(&events, Event::Trending { language, tracks, error });
         }
         Job::Resolve { gen, track } => {
-            let result = match stream_url(&track) {
-                Some((url, provider)) => Ok(ResolvedStream { url, headers: Vec::new(), duration: track.duration, provider, bitrate_kbps: None }),
-                None => Err("This track cannot be streamed in the browser".to_string()),
-            };
+            let result = resolve_url(&track).await.map(|(url, provider)| ResolvedStream { url, headers: Vec::new(), duration: track.duration, provider, bitrate_kbps: None });
             emit(&events, Event::Resolved { gen, track, result });
         }
         Job::Warm { track } => emit(&events, Event::Warmed { track_id: track.id, warmed: None }),

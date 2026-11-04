@@ -2,15 +2,18 @@ import * as saavn from "./saavn.ts";
 import * as youtube from "./youtube.ts";
 import { retryAfter, type Namespace } from "./limit.ts";
 import { boundedRange, CHUNK } from "./range.ts";
-import { pickMatch } from "./match.ts";
+import { pickMatch, searchQueries } from "./match.ts";
 import * as lyrics from "./lyrics.ts";
+import { cacheFrom, remembered, useCache, type StoreNamespace } from "./store.ts";
 import { allowedImage, MAX_IMAGE_BYTES } from "./image.ts";
 
 export { RateLimiter } from "./limiter.ts";
+export { EdgeStore } from "./edge.ts";
 
 interface Env {
   ASSETS: Fetcher;
   LIMITER?: Namespace;
+  STORE?: StoreNamespace;
 }
 
 const ID = /^[\w-]{3,40}$/;
@@ -39,6 +42,38 @@ async function proxy(upstream: string, request: Request, extra: Record<string, s
 
 const standIn = new Map<string, { url: string; until: number }>();
 
+interface Resolved {
+  url: string;
+  source: "jiosaavn" | "youtube";
+}
+
+async function standInFor(id: string, title: string, artist: string, duration: number): Promise<string> {
+  const found = await remembered(`stand:${id}`, (value: { url: string }) => (value.url ? 1200 : 120), async () => {
+    for (const query of searchQueries(title, artist)) {
+      const match = pickMatch(await saavn.search(query, 10).catch(() => []), title, artist, duration);
+      if (match) return { url: await saavn.streamUrl(match.id) };
+    }
+    return { url: "" };
+  });
+  return found.url;
+}
+
+async function resolve(source: string, id: string, url: URL): Promise<Resolved | null> {
+  if (source !== "youtube") {
+    const direct = await remembered(`direct:${id}`, 1200, async () => ({ url: await saavn.streamUrl(id) }));
+    return { url: direct.url, source: "jiosaavn" };
+  }
+  try {
+    await youtube.streamUrl(id);
+    return { url: `/api/audio?${new URLSearchParams({ source: "youtube", id, t: url.searchParams.get("t") ?? "", a: url.searchParams.get("a") ?? "", d: url.searchParams.get("d") ?? "" })}`, source: "youtube" };
+  } catch {
+    const title = url.searchParams.get("t") ?? "";
+    if (!title) return null;
+    const stand = await standInFor(id, title, url.searchParams.get("a") ?? "", Number(url.searchParams.get("d") ?? 0) || 0).catch(() => "");
+    return stand ? { url: stand, source: "jiosaavn" } : null;
+  }
+}
+
 async function youtubeAudio(request: Request, id: string, url: URL): Promise<Response> {
   const agent = { "User-Agent": youtube.VR_AGENT };
   for (const fresh of [false, true]) {
@@ -62,8 +97,11 @@ async function youtubeAudio(request: Request, id: string, url: URL): Promise<Res
       if (!stand || stand.until < Date.now()) {
         const artist = url.searchParams.get("a") ?? "";
         const duration = Number(url.searchParams.get("d") ?? 0) || 0;
-        const match = pickMatch(await saavn.search(`${title} ${artist}`.trim(), 8), title, artist, duration);
-        stand = { url: match ? await saavn.streamUrl(match.id) : "", until: Date.now() + 20 * 60_000 };
+        const found = await remembered(`stand:${id}`, (value: { url: string }) => (value.url ? 1200 : 120), async () => {
+          const match = pickMatch(await saavn.search(`${title} ${artist}`.trim(), 8), title, artist, duration);
+          return { url: match ? await saavn.streamUrl(match.id) : "" };
+        });
+        stand = { url: found.url, until: Date.now() + 20 * 60_000 };
         if (standIn.size > 300) standIn.clear();
         standIn.set(id, stand);
       }
@@ -83,21 +121,31 @@ async function route(request: Request, url: URL): Promise<Response> {
     case "/api/search": {
       const query = (url.searchParams.get("q") ?? "").trim().slice(0, 120);
       if (!query) return json([]);
-      const songs = source === "youtube" ? await youtube.search(query) : await saavn.search(query);
+      const songs = await remembered(`search:${source}:${query.toLowerCase()}`, 300, () => (source === "youtube" ? youtube.search(query) : saavn.search(query)));
       return json(songs, 200, "public, max-age=300");
     }
     case "/api/trending": {
       const language = (url.searchParams.get("lang") ?? "hindi").replace(/[^a-z]/gi, "").slice(0, 20) || "hindi";
-      return json(await saavn.trending(language), 200, "public, max-age=900");
+      return json(await remembered(`trending:${language}`, 900, () => saavn.trending(language)), 200, "public, max-age=900");
     }
     case "/api/region": {
       const place = (request as Request & { cf?: { country?: string; region?: string } }).cf;
       return json({ country_code: place?.country ?? "", region: place?.region ?? "" }, 200, "private, max-age=3600");
     }
+    case "/api/resolve": {
+      const id = url.searchParams.get("id") ?? "";
+      if (!ID.test(id)) return json({ error: "bad id" }, 400);
+      const found = await resolve(source, id, url);
+      return found ? json(found) : json({ error: "YouTube is not allowing this server to play that song and JioSaavn does not have it yet" }, 502);
+    }
     case "/api/lyrics": {
       const title = (url.searchParams.get("t") ?? "").slice(0, 200);
-      const found = title ? await lyrics.find(title, (url.searchParams.get("a") ?? "").slice(0, 200), Number(url.searchParams.get("d") ?? 0) || 0) : null;
-      return json({ lyrics: found }, 200, found ? "public, max-age=86400" : "public, max-age=300");
+      const artist = (url.searchParams.get("a") ?? "").slice(0, 200);
+      const length = Number(url.searchParams.get("d") ?? 0) || 0;
+      const found = title
+        ? await remembered(`lyrics:${title}|${artist}|${Math.round(length / 5)}`, (value: { lyrics: string | null }) => (value.lyrics ? 604800 : 600), async () => ({ lyrics: await lyrics.find(title, artist, length) }))
+        : { lyrics: null };
+      return json(found, 200, found.lyrics ? "public, max-age=86400" : "public, max-age=300");
     }
     case "/api/image": {
       const target = allowedImage(url.searchParams.get("u") ?? "");
@@ -124,6 +172,7 @@ export default {
     const url = new URL(request.url);
     if (!url.pathname.startsWith("/api/")) return env.ASSETS.fetch(request);
     if (request.method !== "GET" && request.method !== "HEAD") return json({ error: "method not allowed" }, 405);
+    useCache(cacheFrom(env.STORE));
     const wait = await retryAfter(env.LIMITER, request, url.pathname);
     if (wait > 0) {
       const response = json({ error: `Too many requests, try again in ${wait} seconds` }, 429);

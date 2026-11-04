@@ -64,6 +64,7 @@ fn build(volume: f32, events: Sender<Event>, eq: Arc<EqParams>) -> Result<Graph,
     for _ in 0..2 {
         let element = HtmlAudioElement::new().map_err(|_| "audio element")?;
         element.set_preload("auto");
+        element.set_cross_origin(Some("anonymous"));
         let source = context.create_media_element_source(&element).map_err(|_| "audio source")?;
         let gain = context.create_gain().map_err(|_| "audio graph")?;
         source.connect_with_audio_node(&gain).map_err(|_| "audio graph")?;

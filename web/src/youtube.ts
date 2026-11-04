@@ -1,4 +1,5 @@
 import type { Song } from "./saavn.ts";
+import { remembered } from "./store.ts";
 
 const SEARCH = "https://music.youtube.com/youtubei/v1/search?prettyPrint=false";
 const PLAYER = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
@@ -116,13 +117,18 @@ export async function streamUrl(id: string, fresh = false): Promise<string> {
     if (hit.url) return hit.url;
     throw new Error(hit.error ?? "YouTube refused this video");
   }
+  const outcome = await (fresh
+    ? lookupSafe(id)
+    : remembered(`yt:${id}`, (value: { url?: string }) => (value.url ? TTL_OK / 1000 : TTL_REFUSED / 1000), () => lookupSafe(id)));
+  remember(id, outcome);
+  if (outcome.url) return outcome.url;
+  throw new Error(outcome.error ?? "YouTube refused this video");
+}
+
+async function lookupSafe(id: string): Promise<{ url?: string; error?: string }> {
   try {
-    const url = await lookup(id);
-    remember(id, { url });
-    return url;
+    return { url: await lookup(id) };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "YouTube lookup failed";
-    remember(id, { error: message });
-    throw new Error(message);
+    return { error: error instanceof Error ? error.message : "YouTube lookup failed" };
   }
 }

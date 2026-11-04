@@ -36,3 +36,15 @@ test("resolved stream urls are reused briefly, refusals are remembered shorter",
   assert.equal(cached("x2", 1000 + 30_000)?.error, "bot");
   assert.equal(cached("x2", 1000 + 50_000), null);
 });
+
+import { cleanQuery, searchQueries } from "../src/match.ts";
+
+test("long film-song titles still find their JioSaavn twin", () => {
+  const title = 'Veezha Veera (From "OM Chapter 1: Udhiram - The Blood Wood") [Tamil]';
+  assert.equal(cleanQuery(title), "veezha veera");
+  assert.deepEqual(searchQueries(title, "Sai Abhyankkar, Someone").slice(0, 2), ["veezha veera Sai Abhyankkar", "veezha veera"]);
+  const twin = song("t", "Veezha Veera", "Sai Abhyankkar", 231);
+  assert.equal(pickMatch([twin], title, "Sai Abhyankkar", 237)?.id, "t");
+  assert.equal(pickMatch([song("n", "Veera Veera", "Thaman S", 237)], title, "Sai Abhyankkar", 237), null);
+  assert.equal(pickMatch([song("x", "Veezha Veera", "Other", 300)], title, "Sai Abhyankkar", 237), null);
+});
