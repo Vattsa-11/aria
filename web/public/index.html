@@ -162,20 +162,77 @@ window.ariaApplyUpdate = () => location.reload();
       grow.textContent = large ? "Shrink" : "Expand";
     };
     const close = document.createElement("button");
-    close.textContent = "Close";
+    close.textContent = "Hide";
     close.style.cssText = style.replace("#262a33", "#4f8cff");
-    close.onclick = () => window.ariaYTStop();
+    close.onclick = () => {
+      window.ariaYTPause();
+      element.style.display = "none";
+      window.ariaWake?.();
+    };
     buttons.append(grow, close);
     bar.append(label, buttons);
+    bar.style.touchAction = "none";
+    bar.style.cursor = "grab";
+    bar.onpointerdown = (down) => {
+      if (down.target.tagName === "BUTTON") return;
+      const box = element.getBoundingClientRect();
+      const offsetX = down.clientX - box.left;
+      const offsetY = down.clientY - box.top;
+      bar.setPointerCapture(down.pointerId);
+      const move = (event) => {
+        element.style.transform = "none";
+        element.style.right = "auto";
+        element.style.bottom = "auto";
+        element.style.left = Math.max(0, Math.min(innerWidth - box.width, event.clientX - offsetX)) + "px";
+        element.style.top = Math.max(0, Math.min(innerHeight - box.height, event.clientY - offsetY)) + "px";
+      };
+      const up = () => {
+        bar.removeEventListener("pointermove", move);
+        bar.removeEventListener("pointerup", up);
+        try { localStorage.setItem("aria.ytpos", JSON.stringify({ left: element.style.left, top: element.style.top })); } catch {}
+      };
+      bar.addEventListener("pointermove", move);
+      bar.addEventListener("pointerup", up);
+    };
     const slot = document.createElement("div");
     slot.id = "aria-yt-slot";
     slot.style.cssText = "width:100%;aspect-ratio:1/1";
     element.append(bar, slot);
+    try {
+      const saved = JSON.parse(localStorage.getItem("aria.ytpos") || "null");
+      if (saved && saved.left && saved.top) {
+        element.style.right = "auto";
+        element.style.bottom = "auto";
+        element.style.left = saved.left;
+        element.style.top = saved.top;
+      }
+    } catch {}
     document.body.append(element);
     return element;
   };
   const names = { "-1": "buffering", 0: "ended", 1: "playing", 2: "paused", 3: "buffering", 5: "buffering" };
   const touch = () => window.ariaWake?.();
+  let awake = null;
+  let hideTimer = null;
+  const keepAwake = async () => {
+    try {
+      if (!awake && navigator.wakeLock) {
+        awake = await navigator.wakeLock.request("screen");
+        awake.addEventListener("release", () => { awake = null; });
+      }
+    } catch {}
+  };
+  const letSleep = () => { try { awake && awake.release(); } catch {} awake = null; };
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && info.state === "playing") keepAwake(); });
+  const show = () => { clearTimeout(hideTimer); const element = document.getElementById("aria-yt-box"); if (element) element.style.display = "block"; };
+  const settle = (state) => {
+    if (state === "playing" || state === "buffering") { show(); }
+    if (state === "playing") keepAwake(); else letSleep();
+    if (state === "paused") {
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => { const element = document.getElementById("aria-yt-box"); if (element && info.state === "paused") element.style.display = "none"; }, 1500);
+    }
+  };
   window.ariaYTLoad = async (id) => {
     if (!/^[\w-]{6,20}$/.test(id)) return;
     box().style.display = "block";
@@ -192,7 +249,7 @@ window.ariaApplyUpdate = () => location.reload();
       playerVars: { autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1 },
       events: {
         onReady: (event) => { event.target.playVideo(); },
-        onStateChange: (event) => { info.state = names[event.data] || info.state; touch(); },
+        onStateChange: (event) => { info.state = names[event.data] || info.state; settle(info.state); touch(); },
         onError: (event) => { info.error = event.data; info.state = "error"; touch(); },
       },
     });
@@ -203,7 +260,7 @@ window.ariaApplyUpdate = () => location.reload();
       info.duration = player.getDuration() || 0;
     }
   }, 400);
-  window.ariaYTPlay = () => player && player.playVideo && player.playVideo();
+  window.ariaYTPlay = () => { show(); return player && player.playVideo && player.playVideo(); };
   window.ariaYTPause = () => player && player.pauseVideo && player.pauseVideo();
   window.ariaYTSeek = (seconds) => player && player.seekTo && player.seekTo(Number(seconds), true);
   window.ariaYTVolume = (volume) => player && player.setVolume && player.setVolume(Number(volume));
@@ -211,6 +268,7 @@ window.ariaApplyUpdate = () => location.reload();
     try { player && player.stopVideo && player.stopVideo(); } catch {}
     const element = document.getElementById("aria-yt-box");
     if (element) element.style.display = "none";
+    letSleep();
     info.state = "idle";
     touch();
   };

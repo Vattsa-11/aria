@@ -526,9 +526,11 @@ fn track_strip(
         let ctx = ui.ctx().clone();
         let offset_key = key.with("x");
         let rect_key = key.with("rect");
-        let mut offset = ctx.data(|data| data.get_temp::<f32>(offset_key)).unwrap_or(0.0);
+        let offset = ctx.data(|data| data.get_temp::<f32>(offset_key)).unwrap_or(0.0);
         if let Some(rect) = ctx.data(|data| data.get_temp::<egui::Rect>(rect_key)) {
-            offset -= crate::ui::gestures::horizontal_drag(&ctx, rect, key.with("drag"));
+            if crate::ui::gestures::horizontal_drag(&ctx, rect, key.with("drag")).abs() > 10.0 {
+                expanded = true;
+            }
         }
         let output = egui::ScrollArea::horizontal()
             .id_salt(key)
@@ -549,6 +551,9 @@ fn track_strip(
             data.insert_temp(offset_key, output.state.clamped_offset().x.clamp(0.0, most));
             data.insert_temp(rect_key, output.inner_rect);
         });
+    }
+    if expanded != ui.ctx().data(|data| data.get_temp::<bool>(key)).unwrap_or(false) {
+        ui.ctx().request_repaint();
     }
     ui.ctx().data_mut(|data| data.insert_temp(key, expanded));
 }
