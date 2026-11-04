@@ -207,11 +207,14 @@ mod data_dir_tests {
 
     #[test]
     fn data_never_lands_in_the_launch_folder_when_a_home_exists() {
-        let home = Some(PathBuf::from("/home/someone"));
-        let base = super::default_base(None, None, None, home.clone());
-        assert!(base.starts_with("/home/someone"), "{base:?}");
-        assert_eq!(super::default_base(None, None, Some(PathBuf::from("/data")), home.clone()), PathBuf::from("/data"));
-        assert_eq!(super::default_base(Some(PathBuf::from("C:/Users/x/AppData/Roaming")), None, None, home), PathBuf::from("C:/Users/x/AppData/Roaming"));
+        let root = std::env::temp_dir();
+        let home = root.join("someone");
+        let data = root.join("data");
+        let roaming = root.join("roaming");
+        let base = super::default_base(None, None, None, Some(home.clone()));
+        assert!(base.starts_with(&home), "{base:?}");
+        assert_eq!(super::default_base(None, None, Some(data.clone()), Some(home.clone())), data);
+        assert_eq!(super::default_base(Some(roaming.clone()), None, None, Some(home)), roaming);
         assert_eq!(super::default_base(None, None, Some(PathBuf::from("relative")), None), PathBuf::from("."));
     }
 }
