@@ -2,10 +2,8 @@
   "name": "aria-web",
   "main": "src/index.ts",
   "compatibility_date": "2025-09-01",
-  "ratelimits": [
-    { "name": "SEARCH_LIMIT", "namespace_id": "1001", "simple": { "limit": 30, "period": 60 } },
-    { "name": "AUDIO_LIMIT", "namespace_id": "1002", "simple": { "limit": 300, "period": 60 } }
-  ],
+  "durable_objects": { "bindings": [{ "name": "LIMITER", "class_name": "RateLimiter" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RateLimiter"] }],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",

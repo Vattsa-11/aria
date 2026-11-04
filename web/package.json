@@ -6,11 +6,14 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test": "node --test test/saavn.test.ts test/youtube.test.ts"
+    "check": "tsc",
+    "test": "node --test test/saavn.test.ts test/youtube.test.ts test/limit.test.ts"
   },
   "devDependencies": {
-    "wrangler": "^4.0.0",
     "@cloudflare/workers-types": "^5.0.0",
-    "des.js": "^1.1.0"
+    "@types/node": "^26.6.6",
+    "des.js": "^1.1.0",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.0.0"
   }
 }

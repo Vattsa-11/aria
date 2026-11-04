@@ -1,30 +1,20 @@
 import * as saavn from "./saavn.ts";
 import * as youtube from "./youtube.ts";
+import { retryAfter, type Namespace } from "./limit.ts";
+import { boundedRange, CHUNK } from "./range.ts";
 
-interface Limiter {
-  limit(options: { key: string }): Promise<{ success: boolean }>;
-}
+export { RateLimiter } from "./limiter.ts";
 
-export interface Env {
+interface Env {
   ASSETS: Fetcher;
-  SEARCH_LIMIT?: Limiter;
-  AUDIO_LIMIT?: Limiter;
+  LIMITER?: Namespace;
 }
 
 const ID = /^[\w-]{3,40}$/;
-const CHUNK = 1024 * 1024;
 const COPIED = ["content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified"];
 
 function json(body: unknown, status = 200, cache = "no-store"): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": cache } });
-}
-
-export function boundedRange(header: string | null, limit = CHUNK): string | null {
-  const match = /^bytes=(\d+)-(\d*)$/.exec(header ?? "");
-  if (!match) return header === null ? `bytes=0-${limit - 1}` : header;
-  const start = Number(match[1]);
-  const end = match[2] === "" ? Infinity : Number(match[2]);
-  return `bytes=${start}-${Math.min(end, start + limit - 1)}`;
 }
 
 async function proxy(upstream: string, request: Request, extra: Record<string, string> = {}, bound = false): Promise<Response> {
@@ -42,17 +32,6 @@ async function proxy(upstream: string, request: Request, extra: Record<string, s
   out.set("accept-ranges", "bytes");
   out.set("cache-control", "private, max-age=600");
   return new Response(response.body, { status: response.status, headers: out });
-}
-
-export async function limited(env: Env, request: Request, pathname: string): Promise<boolean> {
-  const limiter = pathname === "/api/audio" ? env.AUDIO_LIMIT : env.SEARCH_LIMIT;
-  if (!limiter) return false;
-  const client = request.headers.get("cf-connecting-ip") ?? "unknown";
-  try {
-    return !(await limiter.limit({ key: `${client}:${pathname}` })).success;
-  } catch {
-    return false;
-  }
 }
 
 async function route(request: Request, url: URL): Promise<Response> {
@@ -84,9 +63,10 @@ export default {
     const url = new URL(request.url);
     if (!url.pathname.startsWith("/api/")) return env.ASSETS.fetch(request);
     if (request.method !== "GET" && request.method !== "HEAD") return json({ error: "method not allowed" }, 405);
-    if (await limited(env, request, url.pathname)) {
-      const response = json({ error: "Too many requests, try again in a minute" }, 429);
-      response.headers.set("retry-after", "60");
+    const wait = await retryAfter(env.LIMITER, request, url.pathname);
+    if (wait > 0) {
+      const response = json({ error: `Too many requests, try again in ${wait} seconds` }, 429);
+      response.headers.set("retry-after", String(wait));
       return response;
     }
     try {
