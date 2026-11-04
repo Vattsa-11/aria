@@ -20,6 +20,10 @@ pub fn call_args(name: &str, args: &[wasm_bindgen::JsValue]) {
     let _ = function.apply(&window, &list);
 }
 
+pub fn yt_state() -> Option<serde_json::Value> {
+    serde_json::from_str(&call("ariaYTState")?.as_string()?).ok()
+}
+
 pub fn take_media() -> String {
     call("ariaTakeMedia").and_then(|value| value.as_string()).unwrap_or_default()
 }

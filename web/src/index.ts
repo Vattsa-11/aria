@@ -44,7 +44,7 @@ const standIn = new Map<string, { url: string; until: number }>();
 
 interface Resolved {
   url: string;
-  source: "jiosaavn" | "youtube";
+  source: "jiosaavn" | "youtube" | "embed";
 }
 
 async function standInFor(id: string, title: string, artist: string, duration: number): Promise<string> {
@@ -68,9 +68,8 @@ async function resolve(source: string, id: string, url: URL): Promise<Resolved |
     return { url: `/api/audio?${new URLSearchParams({ source: "youtube", id, t: url.searchParams.get("t") ?? "", a: url.searchParams.get("a") ?? "", d: url.searchParams.get("d") ?? "" })}`, source: "youtube" };
   } catch {
     const title = url.searchParams.get("t") ?? "";
-    if (!title) return null;
-    const stand = await standInFor(id, title, url.searchParams.get("a") ?? "", Number(url.searchParams.get("d") ?? 0) || 0).catch(() => "");
-    return stand ? { url: stand, source: "jiosaavn" } : null;
+    const stand = title ? await standInFor(id, title, url.searchParams.get("a") ?? "", Number(url.searchParams.get("d") ?? 0) || 0).catch(() => "") : "";
+    return stand ? { url: stand, source: "jiosaavn" } : { url: `yt:${id}`, source: "embed" };
   }
 }
 

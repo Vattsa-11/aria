@@ -34,6 +34,18 @@ struct Graph {
     eq_version: u64,
     volume: f32,
     events: Sender<Event>,
+    embed: Option<Embed>,
+}
+
+struct Embed {
+    track_id: u64,
+    duration: Option<Duration>,
+    ended_sent: bool,
+    error_sent: bool,
+}
+
+pub fn embed_id(url: &str) -> Option<&str> {
+    url.strip_prefix("yt:").filter(|id| !id.is_empty())
 }
 
 #[derive(Clone)]
@@ -87,7 +99,7 @@ fn build(volume: f32, events: Sender<Event>, eq: Arc<EqParams>) -> Result<Graph,
     previous.connect_with_audio_node(&master).map_err(|_| "audio graph")?;
     master.connect_with_audio_node(&context.destination()).map_err(|_| "audio graph")?;
     let [first, second]: [Deck; 2] = decks.try_into().map_err(|_| "audio decks")?;
-    let mut graph = Graph { context, decks: [first, second], filters, preamp, master, active: 0, eq, eq_version: 0, volume, events };
+    let mut graph = Graph { context, decks: [first, second], filters, preamp, master, active: 0, eq, eq_version: 0, volume, events, embed: None };
     graph.sync_eq();
     for index in 0..2 {
         graph.listen(index);
@@ -143,11 +155,69 @@ impl Graph {
         let _ = param.set_value_curve_at_time(&mut curve, now, seconds.max(0.05));
     }
 
+    fn stop_embed(&mut self) {
+        if self.embed.take().is_some() {
+            crate::install::call_named("ariaYTStop");
+        }
+    }
+
+    fn play_embed(&mut self, request: &PlayRequest, id: &str) {
+        for deck in &mut self.decks {
+            let _ = deck.element.pause();
+            deck.track_id = None;
+            deck.loading = false;
+        }
+        self.embed = Some(Embed { track_id: request.track.id, duration: request.duration, ended_sent: false, error_sent: false });
+        crate::install::call_with("ariaYTVolume", &format!("{}", (self.volume * 100.0).round()));
+        crate::install::call_with("ariaYTLoad", id);
+    }
+
+    fn embed_snapshot(&mut self) -> Option<Snapshot> {
+        let embed = self.embed.as_mut()?;
+        let info = crate::install::yt_state()?;
+        let name = info["state"].as_str().unwrap_or("buffering");
+        let state = match name {
+            "playing" => AudioState::Playing,
+            "paused" => AudioState::Paused,
+            "ended" | "idle" => AudioState::Idle,
+            _ => AudioState::Loading,
+        };
+        if name == "ended" && !embed.ended_sent {
+            embed.ended_sent = true;
+            let _ = self.events.send(Event::AudioEnded);
+            wake_up();
+        }
+        if name == "error" && !embed.error_sent {
+            embed.error_sent = true;
+            let code = info["error"].as_i64().unwrap_or(0);
+            let message = if code == 101 || code == 150 {
+                "The owner does not allow this song to be played outside YouTube".to_string()
+            } else {
+                "The YouTube player could not play this song".to_string()
+            };
+            let _ = self.events.send(Event::AudioError { message });
+            wake_up();
+        }
+        let reported = info["duration"].as_f64().filter(|secs| *secs > 0.0);
+        Some(Snapshot {
+            state,
+            track_id: Some(embed.track_id),
+            position: Duration::from_secs_f64(info["position"].as_f64().unwrap_or(0.0).max(0.0)),
+            duration: reported.map(Duration::from_secs_f64).or(embed.duration),
+        })
+    }
+
     fn play(&mut self, request: Box<PlayRequest>) {
         let Some(stream) = request.resolved.as_ref() else {
             let _ = self.events.send(Event::AudioError { message: "This track cannot be played in the browser".to_string() });
             return;
         };
+        if let Some(id) = embed_id(&stream.url) {
+            let id = id.to_string();
+            self.play_embed(&request, &id);
+            return;
+        }
+        self.stop_embed();
         let _ = self.context.resume();
         let now = self.context.current_time();
         let crossfade = request.fade > Duration::from_millis(50) && self.is_playing(self.active);
@@ -199,6 +269,9 @@ impl Graph {
     }
 
     fn preload(&mut self, url: String) {
+        if embed_id(&url).is_some() {
+            return;
+        }
         let idle = 1 - self.active;
         let deck = &mut self.decks[idle];
         if deck.preloaded.as_deref() == Some(url.as_str()) || (deck.track_id.is_some() && !deck.element.paused()) {
@@ -216,6 +289,9 @@ impl Graph {
 
     fn snapshot(&mut self) -> Snapshot {
         self.sync_eq();
+        if let Some(snapshot) = self.embed_snapshot() {
+            return snapshot;
+        }
         let deck = &mut self.decks[self.active];
         let element = &deck.element;
         if deck.track_id.is_none() {
@@ -239,6 +315,33 @@ impl Graph {
     }
 
     fn command(&mut self, command: Command) {
+        if self.embed.is_some() {
+            match &command {
+                Command::Pause => {
+                    crate::install::call_named("ariaYTPause");
+                    return;
+                }
+                Command::Resume => {
+                    crate::install::call_named("ariaYTPlay");
+                    return;
+                }
+                Command::Seek(to) => {
+                    crate::install::call_with("ariaYTSeek", &to.as_secs_f64().to_string());
+                    return;
+                }
+                Command::SetVolume(volume) => {
+                    self.volume = *volume;
+                    self.master.gain().set_value(*volume);
+                    crate::install::call_with("ariaYTVolume", &format!("{}", (volume * 100.0).round()));
+                    return;
+                }
+                Command::Stop => {
+                    self.stop_embed();
+                    return;
+                }
+                _ => {}
+            }
+        }
         match command {
             Command::Play(request) => self.play(request),
             Command::Pause => {

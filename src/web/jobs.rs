@@ -215,6 +215,9 @@ fn js_error(value: wasm_bindgen::JsValue) -> String {
 async fn download_track(track: &Track, events: &Sender<Event>) -> Result<std::path::PathBuf, String> {
     use wasm_bindgen::closure::Closure;
     let (url, _) = resolve_url(track).await?;
+    if url.starts_with("yt:") {
+        return Err("This song can only be played in the YouTube player, so it cannot be saved offline".to_string());
+    }
     let id = track.id;
     let progress_events = events.clone();
     let progress = Closure::<dyn FnMut(f64, f64)>::new(move |done: f64, total: f64| {
