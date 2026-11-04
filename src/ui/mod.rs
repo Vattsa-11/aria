@@ -1177,6 +1177,8 @@ fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width
         return;
     }
     let mut open = true;
+    let mut adding = false;
+    let mut clear = false;
     let user_count = app.queue.user_len();
     let context_name = if app.queue.context_name.is_empty() {
         "context".to_string()
@@ -1203,7 +1205,16 @@ fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width
                     }
                 });
             });
-            ui.add_space(10.0);
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                if widgets::pill_button(ui, "Add songs", false, accent, pal) {
+                    adding = true;
+                }
+                if user_count > 0 && widgets::pill_button(ui, "Clear", false, accent, pal) {
+                    clear = true;
+                }
+            });
+            ui.add_space(6.0);
             ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, ..Default::default() })
@@ -1352,6 +1363,12 @@ fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width
             }
             });
         });
+    if clear {
+        app.clear_user_queue();
+    }
+    if adding {
+        app.begin_adding_songs();
+    }
     if !open {
         app.queue_open = false;
     }

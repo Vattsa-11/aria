@@ -172,6 +172,9 @@ pub struct App {
 
     pub mini: crate::miniplayer::MiniState,
     play_gen: u64,
+    pub adding_songs: bool,
+    skip_on_fail: bool,
+    skip_streak: u8,
 
     resolving: bool,
     pending_start_ms: Option<u64>,
@@ -315,6 +318,9 @@ impl App {
             queue_drag: crate::ui::pages::rows::DragState::default(),
             mini: crate::miniplayer::MiniState::default(),
             play_gen: 0,
+            adding_songs: false,
+            skip_on_fail: false,
+            skip_streak: 0,
             resolving: false,
             pending_start_ms,
             ctx: Some(ctx),
@@ -498,6 +504,7 @@ impl App {
     }
 
     pub fn start_track(&mut self, track: Track, origin: TrackOrigin, start: Duration) {
+        self.skip_on_fail = false;
         let manual = std::mem::take(&mut self.manual_fade);
         let fade = if std::mem::take(&mut self.crossfade_arm) {
             Duration::from_secs_f32(transition_secs(self.settings.crossfade, manual))
@@ -609,6 +616,29 @@ impl App {
     }
 
     pub fn play_advance(&mut self, automatic: bool) {
+        self.play_advance_inner(automatic);
+        self.skip_on_fail = true;
+    }
+
+    pub fn begin_adding_songs(&mut self) {
+        self.adding_songs = true;
+        self.page = Page::Search;
+        self.queue_open = false;
+        self.now_playing_open = false;
+    }
+
+    pub fn clear_user_queue(&mut self) {
+        let count = self.queue.user_len();
+        while self.queue.user_len() > 0 {
+            self.queue.remove_user(0);
+        }
+        if count > 0 {
+            self.notify("Queue cleared");
+            self.persist(true);
+        }
+    }
+
+    fn play_advance_inner(&mut self, automatic: bool) {
         if !automatic && self.settings.crossfade > 0.05 && self.audio_state() == AudioState::Playing {
             self.crossfade_arm = true;
             self.manual_fade = true;
@@ -723,6 +753,10 @@ impl App {
         let Some(track) = self.search.results.get(index).cloned() else {
             return;
         };
+        if self.adding_songs {
+            self.add_to_queue(track);
+            return;
+        }
         let name = if self.search.query.trim().is_empty() {
             "Search results".to_string()
         } else {
@@ -2701,6 +2735,7 @@ impl App {
                     self.resolving = false;
                     match result {
                         Ok(stream) => {
+                            self.skip_streak = 0;
                             track.provider_meta = Some(ProviderMeta {
                                 provider: stream.provider,
                                 bitrate_kbps: stream.bitrate_kbps,
@@ -2717,7 +2752,14 @@ impl App {
                                 analyze,
                             })));
                         }
+                        Err(message) if self.skip_on_fail && self.skip_streak < 3 && self.queue.has_following(true) => {
+                            self.skip_streak += 1;
+                            self.notify(format!("Skipped {}: {message}", track.title));
+                            self.skip_on_fail = false;
+                            self.play_advance(true);
+                        }
                         Err(message) => {
+                            self.skip_streak = 0;
                             let title = track.title.clone();
                             self.fail(
                                 format!("Cannot play {title}: {message}"),

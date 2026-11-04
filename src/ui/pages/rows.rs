@@ -282,6 +282,8 @@ pub fn track_row(
     badge: Option<&str>,
 ) -> RowResponse {
     let width = ui.available_width();
+    let arrows = show_reorder && drag_state.is_some();
+    let compact_queue = arrows && width < 460.0;
     let show_reorder = show_reorder && width >= 460.0;
     let sense = if drag_state.is_some() && show_reorder {
         egui::Sense::click_and_drag()
@@ -358,18 +360,22 @@ pub fn track_row(
     );
     right = like_rect.min.x - 4.0;
     let like_response = ui.interact(
-        like_rect,
+        if compact_queue { egui::Rect::from_center_size(like_rect.center(), egui::Vec2::ZERO) } else { like_rect },
         id_salt.with(("row-like", index)),
         egui::Sense::click(),
     );
-    let heart_icon = if liked { Icon::HeartFilled } else { Icon::Heart };
-    let heart_pop = crate::ui::widgets::heart_scale(ui.ctx(), like_response.id, heart_icon);
-    crate::ui::icons::draw(
-        ui.painter(),
-        egui::Rect::from_center_size(like_rect.center(), egui::Vec2::splat(22.0 * heart_pop)),
-        heart_icon,
-        if liked { accent } else { pal.muted },
-    );
+    if compact_queue {
+        right = like_rect.max.x;
+    } else {
+        let heart_icon = if liked { Icon::HeartFilled } else { Icon::Heart };
+        let heart_pop = crate::ui::widgets::heart_scale(ui.ctx(), like_response.id, heart_icon);
+        crate::ui::icons::draw(
+            ui.painter(),
+            egui::Rect::from_center_size(like_rect.center(), egui::Vec2::splat(22.0 * heart_pop)),
+            heart_icon,
+            if liked { accent } else { pal.muted },
+        );
+    }
 
     let mut remove = None;
     if show_remove {
@@ -394,7 +400,7 @@ pub fn track_row(
 
     let mut up = None;
     let mut down = None;
-    if show_reorder {
+    if arrows {
         let up_rect = egui::Rect::from_center_size(
             egui::pos2(right - 22.0, rect.center().y),
             egui::Vec2::splat(MIN_HIT),

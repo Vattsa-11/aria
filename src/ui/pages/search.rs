@@ -230,6 +230,15 @@ pub fn search(app: &mut App, ui: &mut Ui) {
         }
     });
 
+    if app.adding_songs {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Adding to your queue: tap songs to add them").size(13.5).color(accent));
+            if pill_button(ui, "Done", true, accent, &pal) {
+                app.adding_songs = false;
+                app.queue_open = true;
+            }
+        });
+    }
     ui.add_space(8.0);
     if !short {
     ui.horizontal_wrapped(|ui| {
