@@ -74,9 +74,8 @@ pub fn home(app: &mut App, ui: &mut egui::Ui) {
             mood_section(app, ui, &pal, accent);
 
             if !app.history.is_empty() {
-                section(ui, "Recently played", &pal);
                 let recent: Vec<Track> = app.history.iter().take(12).cloned().collect();
-                track_strip(app, ui, &recent, &pal, accent, &mut actions, Action::PlayRecent);
+                track_strip(app, ui, &recent, &pal, accent, &mut actions, Action::PlayRecent, "Recently played");
                 ui.add_space(10.0);
             }
 
@@ -331,8 +330,8 @@ fn trending_section(
                 return;
             }
             let title = crate::region::trending_title(app.settings.region_label.as_deref(), &language);
-            section(ui, &title, pal);
             if app.trending.is_empty() {
+                section(ui, &title, pal);
                 if app.trending_loading {
                     ui.label(RichText::new("Loading trending songs...").size(13.0).color(pal.muted));
                 } else if let Some(error) = app.trending_error.clone() {
@@ -343,7 +342,7 @@ fn trending_section(
                 }
             } else {
                 let tracks = app.trending.clone();
-                track_strip(app, ui, &tracks, pal, accent, actions, Action::PlayTrending);
+                track_strip(app, ui, &tracks, pal, accent, actions, Action::PlayTrending, &title);
             }
             ui.add_space(10.0);
         }
@@ -435,6 +434,51 @@ fn shortcut_grid(
     });
 }
 
+fn shelf_width(available: f32) -> f32 {
+    if available < 460.0 {
+        138.0
+    } else if available < 800.0 {
+        150.0
+    } else {
+        166.0
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn track_card(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    index: usize,
+    track: &Track,
+    width: f32,
+    pal: &Palette,
+    accent: Color32,
+    actions: &mut Vec<Action>,
+    play: fn(usize) -> Action,
+) {
+    let texture = app.thumb(track);
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, width + 46.0), Sense::click());
+    if response.is_pointer_button_down_on() {
+        ui.painter().rect_filled(rect.expand(4.0), egui::CornerRadius::same(12), pal.raised);
+    } else if response.hovered() {
+        ui.painter().rect_filled(rect.expand(4.0), egui::CornerRadius::same(12), pal.raised.gamma_multiply(0.7));
+    }
+    let art_rect = egui::Rect::from_min_size(rect.min + Vec2::new(4.0, 4.0), Vec2::splat(width - 8.0));
+    paint_art(ui, art_rect, texture, &track.title, pal, accent);
+    let title_font = egui::FontId::proportional(13.0);
+    let artist_font = egui::FontId::proportional(11.5);
+    let room = width - 10.0;
+    let title = crate::ui::widgets::fit_text_to(ui.painter(), &track.title, &title_font, pal.text, room);
+    ui.painter().text(egui::pos2(rect.min.x + 6.0, art_rect.max.y + 8.0), egui::Align2::LEFT_TOP, title, title_font, pal.text);
+    let artist = crate::ui::widgets::fit_text_to(ui.painter(), track.display_artist(), &artist_font, pal.muted, room);
+    ui.painter().text(egui::pos2(rect.min.x + 6.0, art_rect.max.y + 27.0), egui::Align2::LEFT_TOP, artist, artist_font, pal.muted);
+    crate::ui::pages::rows::track_context_menu(app, &response, track, pal);
+    if response.clicked() {
+        actions.push(play(index));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn track_strip(
     app: &mut App,
     ui: &mut egui::Ui,
@@ -443,43 +487,59 @@ fn track_strip(
     accent: Color32,
     actions: &mut Vec<Action>,
     play: fn(usize) -> Action,
+    title: &str,
 ) {
-    ui.horizontal_wrapped(|ui| {
-        for (index, track) in tracks.iter().enumerate() {
-            let texture = app.thumb(track);
-            let (rect, response) =
-                ui.allocate_exact_size(Vec2::new(card_w(), card_w() + 44.0), Sense::click());
-            if response.hovered() {
-                ui.painter()
-                    .rect_filled(rect.expand(4.0), egui::CornerRadius::same(12), pal.raised);
-            }
-            let art_rect =
-                egui::Rect::from_min_size(rect.min + Vec2::new(4.0, 4.0), Vec2::splat(card_w() - 8.0));
-            paint_art(ui, art_rect, texture, &track.title, pal, accent);
-            let clip = ui.painter().with_clip_rect(egui::Rect::from_min_max(
-                egui::pos2(rect.min.x + 4.0, art_rect.max.y + 6.0),
-                egui::pos2(rect.max.x - 4.0, rect.max.y),
-            ));
-            clip.text(
-                egui::pos2(rect.min.x + 6.0, art_rect.max.y + 8.0),
-                egui::Align2::LEFT_TOP,
-                &track.title,
-                egui::FontId::proportional(13.0),
-                pal.text,
-            );
-            clip.text(
-                egui::pos2(rect.min.x + 6.0, art_rect.max.y + 26.0),
-                egui::Align2::LEFT_TOP,
-                track.display_artist(),
-                egui::FontId::proportional(11.0),
-                pal.muted,
-            );
-            crate::ui::pages::rows::track_context_menu(app, &response, track, pal);
-            if response.clicked() {
-                actions.push(play(index));
-            }
+    let key = egui::Id::NULL.with(("aria.shelf", title));
+    let mut expanded = ui.ctx().data(|data| data.get_temp::<bool>(key)).unwrap_or(false);
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(title).size(18.0).color(pal.text).strong());
+        if tracks.len() > 3 {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let label = if expanded { "Show less" } else { "Show all" };
+                if ui.add(egui::Button::new(RichText::new(label).size(13.0).color(pal.muted)).fill(Color32::TRANSPARENT)).clicked() {
+                    expanded = !expanded;
+                }
+            });
         }
     });
+    ui.add_space(8.0);
+    if expanded {
+        ui.horizontal_wrapped(|ui| {
+            for (index, track) in tracks.iter().enumerate() {
+                track_card(app, ui, index, track, card_w(), pal, accent, actions, play);
+            }
+        });
+    } else {
+        let width = shelf_width(ui.available_width());
+        let ctx = ui.ctx().clone();
+        let offset_key = key.with("x");
+        let rect_key = key.with("rect");
+        let mut offset = ctx.data(|data| data.get_temp::<f32>(offset_key)).unwrap_or(0.0);
+        if let Some(rect) = ctx.data(|data| data.get_temp::<egui::Rect>(rect_key)) {
+            offset -= crate::ui::gestures::horizontal_drag(&ctx, rect, key.with("drag"));
+        }
+        let output = egui::ScrollArea::horizontal()
+            .id_salt(key)
+            .scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Never, ..Default::default() })
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+            .auto_shrink([false, true])
+            .horizontal_scroll_offset(offset)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 12.0;
+                    for (index, track) in tracks.iter().enumerate() {
+                        track_card(app, ui, index, track, width, pal, accent, actions, play);
+                    }
+                });
+            });
+        let most = (output.content_size.x - output.inner_rect.width()).max(0.0);
+        ctx.data_mut(|data| {
+            data.insert_temp(offset_key, output.state.clamped_offset().x.clamp(0.0, most));
+            data.insert_temp(rect_key, output.inner_rect);
+        });
+    }
+    ui.ctx().data_mut(|data| data.insert_temp(key, expanded));
 }
 
 fn card(

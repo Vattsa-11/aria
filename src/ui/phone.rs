@@ -93,6 +93,11 @@ fn bottom_inset(ui: &Ui) -> f32 {
     ui.ctx().input(|input| input.safe_area_insets()).0.bottom.max(0.0)
 }
 
+#[cfg(target_arch = "wasm32")]
+pub fn top_inset_of(ctx: &egui::Context) -> f32 {
+    ctx.input(|input| input.safe_area_insets()).0.top.max(0.0)
+}
+
 pub fn top_inset(ui: &Ui) -> f32 {
     ui.ctx().input(|input| input.safe_area_insets()).0.top.max(0.0)
 }

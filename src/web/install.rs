@@ -21,6 +21,14 @@ pub fn call_with(name: &str, argument: &str) {
     }
 }
 
+pub fn update_ready() -> bool {
+    call("ariaUpdateReady").and_then(|value| value.as_bool()).unwrap_or(false)
+}
+
+pub fn apply_update() {
+    let _ = call("ariaApplyUpdate");
+}
+
 pub fn haptic() {
     call_with("ariaHaptic", "14");
 }

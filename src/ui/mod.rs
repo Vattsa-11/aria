@@ -75,6 +75,8 @@ pub fn root(app: &mut App, ui: &mut Ui) {
     if app.toast.is_some() {
         toast(&ctx, app, accent, &pal);
     }
+    #[cfg(target_arch = "wasm32")]
+    update_banner(app, &ctx, accent);
 
     fix_match_popup(app, &ctx, accent, &pal);
     help_dialog(app, &ctx, accent, &pal);
@@ -1481,6 +1483,41 @@ fn fix_match_popup(app: &mut App, ctx: &egui::Context, accent: Color32, pal: &Pa
     if cancel || !open {
         app.fix_match = None;
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn update_banner(app: &App, ctx: &egui::Context, accent: Color32) {
+    let dismissed = egui::Id::NULL.with("aria.update-dismissed");
+    if ctx.data(|data| data.get_temp::<bool>(dismissed)).unwrap_or(false) || !crate::install::update_ready() {
+        return;
+    }
+    let playing = app.is_playing();
+    egui::Area::new(egui::Id::NULL.with("aria.update-banner"))
+        .anchor(Align2::CENTER_TOP, Vec2::new(0.0, 10.0 + phone::top_inset_of(ctx)))
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            ui.set_max_width((ctx.content_rect().width() - 24.0).clamp(200.0, 420.0));
+            Frame::new()
+                .fill(widgets::mix(accent, Color32::BLACK, 0.25))
+                .corner_radius(CornerRadius::same(16))
+                .inner_margin(Margin::symmetric(14, 10))
+                .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new("A new version of Aria is ready").size(14.0).color(Color32::WHITE).strong());
+                            if playing {
+                                ui.label(RichText::new("Music pauses for a moment while it updates").size(12.0).color(Color32::from_white_alpha(200)));
+                            }
+                        });
+                        if ui.add(egui::Button::new(RichText::new("Update").strong().color(accent)).fill(Color32::WHITE).corner_radius(CornerRadius::same(12)).min_size(Vec2::new(78.0, 36.0))).clicked() {
+                            crate::install::apply_update();
+                        }
+                        if ui.add(egui::Button::new(RichText::new("Later").color(Color32::WHITE)).fill(Color32::TRANSPARENT).min_size(Vec2::new(52.0, 36.0))).clicked() {
+                            ctx.data_mut(|data| data.insert_temp(dismissed, true));
+                        }
+                    });
+                });
+        });
 }
 
 fn toast(ctx: &egui::Context, app: &mut App, accent: Color32, pal: &Palette) {

@@ -41,6 +41,25 @@ if (navigator.storage?.persist) {
   navigator.storage.persist().finally(() => window.ariaStorageRefresh());
   setInterval(() => window.ariaStorageRefresh(), 5000);
 }
+let loadedBuild = null;
+window.__ariaUpdate = false;
+async function checkVersion() {
+  try {
+    const response = await fetch("/version.json", { cache: "no-store" });
+    const { build } = await response.json();
+    if (loadedBuild === null) loadedBuild = build;
+    else if (build !== loadedBuild) {
+      window.__ariaUpdate = true;
+      window.ariaWake?.();
+      navigator.serviceWorker?.getRegistration().then((registration) => registration?.update());
+    }
+  } catch {}
+}
+checkVersion();
+setInterval(checkVersion, 10 * 60 * 1000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) checkVersion(); });
+window.ariaUpdateReady = () => window.__ariaUpdate === true;
+window.ariaApplyUpdate = () => location.reload();
 window.ariaHaptic = (ms) => { try { navigator.vibrate?.(Number(ms) || 12); } catch {} };
 window.ariaDownload = async (id, url, progress) => {
   const cache = await caches.open("aria-offline");
@@ -146,7 +165,8 @@ if (window.__ariaBlocked) {
   }
   try {
     stage("Downloading Aria...");
-    const { default: init, start, open_library } = await import("/pkg/aria.js");
+    const { default: init, start, open_library, wake_ui } = await import("/pkg/aria.js");
+    window.ariaWake = wake_ui;
     await within(init(), 60000, "download");
     if (holdsLibrary) {
       stage("Opening your library...");

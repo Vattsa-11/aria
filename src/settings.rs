@@ -51,6 +51,10 @@ pub struct Settings {
     pub autoplay: bool,
     pub normalize: bool,
     pub battery_saver: bool,
+    #[serde(default)]
+    pub library_grid: bool,
+    #[serde(default = "haptics_default")]
+    pub haptics: bool,
     pub crossfade: f32,
 
     pub jiosaavn_base: String,
@@ -100,6 +104,8 @@ impl Default for Settings {
             autoplay: true,
             normalize: false,
             battery_saver: false,
+            library_grid: false,
+            haptics: true,
             crossfade: 4.0,
             jiosaavn_base: String::new(),
             ytdlp_cookie_browser: None,
@@ -119,6 +125,10 @@ pub fn test_data_dir() -> PathBuf {
     DATA_DIR_OVERRIDE
         .get_or_init(|| std::env::temp_dir().join("aria-test-data"))
         .clone()
+}
+
+fn haptics_default() -> bool {
+    true
 }
 
 pub fn data_dir() -> PathBuf {

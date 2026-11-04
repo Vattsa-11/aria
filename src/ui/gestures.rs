@@ -106,6 +106,39 @@ pub fn paint_reveal(ui: &Ui, rect: Rect, reveal: f32, accent: Color32) {
     }
 }
 
+pub fn horizontal_drag(ctx: &Context, rect: Rect, key: Id) -> f32 {
+    let (pressed, down, now, delta) = ctx.input(|input| (input.pointer.primary_pressed(), input.pointer.primary_down(), input.pointer.latest_pos(), input.pointer.delta()));
+    if pressed {
+        if let Some(position) = now.filter(|position| rect.contains(*position)) {
+            ctx.data_mut(|data| data.insert_temp(key, (position, 0u8)));
+        }
+    }
+    let Some((origin, axis)) = ctx.data(|data| data.get_temp::<(Pos2, u8)>(key)) else {
+        return 0.0;
+    };
+    if !down {
+        ctx.data_mut(|data| data.remove_temp::<(Pos2, u8)>(key));
+        return 0.0;
+    }
+    let Some(now) = now else {
+        return 0.0;
+    };
+    if axis == 0 {
+        let moved = now - origin;
+        if moved.x.abs() > 8.0 || moved.y.abs() > 8.0 {
+            let axis = if moved.x.abs() > moved.y.abs() * 1.2 { 1 } else { 2 };
+            ctx.data_mut(|data| data.insert_temp(key, (origin, axis)));
+            return if axis == 1 { moved.x } else { 0.0 };
+        }
+        return 0.0;
+    }
+    if axis == 1 {
+        delta.x
+    } else {
+        0.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

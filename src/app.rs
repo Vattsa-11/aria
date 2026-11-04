@@ -1459,7 +1459,9 @@ impl App {
 
     fn haptic(&self) {
         #[cfg(target_arch = "wasm32")]
-        crate::install::haptic();
+        if self.settings.haptics {
+            crate::install::haptic();
+        }
     }
 
     pub fn toggle_like_track(&mut self, track: &Track) {

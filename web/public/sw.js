@@ -19,6 +19,6 @@ async function update(request) {
 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-  if (event.request.method !== "GET" || url.origin !== location.origin || url.pathname.startsWith("/api/")) return;
+  if (event.request.method !== "GET" || url.origin !== location.origin || url.pathname.startsWith("/api/") || url.pathname === "/version.json" || url.pathname.startsWith("/offline/")) return;
   event.respondWith(update(event.request).catch(() => caches.match(event.request).then((hit) => hit || caches.match("/"))));
 });

@@ -185,6 +185,7 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
                     }
                 });
                 ui.add_space(10.0);
+                if crate::platform::native_engine() {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("Autoplay a radio mix when the queue ends")
@@ -203,7 +204,10 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
                         }
                     });
                 });
+                    ui.add_space(10.0);
+                }
                 ui.add_space(10.0);
+                if crate::platform::native_engine() {
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new("Volume leveling (ReplayGain-style)")
@@ -223,6 +227,19 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
                         }
                     });
                 });
+                }
+                if crate::platform::touch_device() {
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Haptic feedback on like, queue and swipes").size(13.5).color(pal.muted));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if crate::ui::widgets::toggle_switch(ui, app.settings.haptics, accent, &pal) {
+                                app.settings.haptics = !app.settings.haptics;
+                                app.touch_settings();
+                            }
+                        });
+                    });
+                }
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Crossfade").size(13.5).color(pal.muted));
@@ -545,6 +562,7 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
                             .color(pal.muted),
                     );
                 }
+                if crate::platform::native_engine() {
                 ui.add_space(2.0);
                 ui.label(
                     RichText::new("Errors are written to aria.log in the library folder")
@@ -557,24 +575,24 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
                         .size(12.5)
                         .color(pal.muted),
                 );
+                }
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if crate::ui::widgets::accent_button(
-                        ui,
-                        "Keyboard shortcuts",
-                        egui::vec2(190.0, 44.0),
-                        accent,
-                    ) {
+                    if !crate::platform::touch_device()
+                        && crate::ui::widgets::accent_button(ui, "Keyboard shortcuts", egui::vec2(190.0, 44.0), accent)
+                    {
                         app.help_open = true;
                     }
-                    ui.add_space(8.0);
-                    if crate::ui::widgets::pill_button(ui, "Update yt-dlp", false, accent, &pal) {
-                        let _ = app.jobs.tx.send(crate::jobs::Job::DownloadYtDlp);
-                        app.notify("Updating yt-dlp...");
+                    if crate::platform::native_engine() {
+                        ui.add_space(8.0);
+                        if crate::ui::widgets::pill_button(ui, "Update yt-dlp", false, accent, &pal) {
+                            let _ = app.jobs.tx.send(crate::jobs::Job::DownloadYtDlp);
+                            app.notify("Updating yt-dlp...");
+                        }
                     }
                 });
                 ui.add_space(6.0);
-                if let Some((message, ready)) = app.ytdlp_status.clone() {
+                if let Some((message, ready)) = app.ytdlp_status.clone().filter(|_| crate::platform::native_engine()) {
                     ui.label(
                         RichText::new(format!(
                             "{message}{}",
