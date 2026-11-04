@@ -20,6 +20,24 @@ pub enum RegionMode {
     Manual,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum KeepAwake {
+    Off,
+    #[default]
+    YoutubePlayer,
+    WhilePlaying,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(any(target_arch = "wasm32", test))]
+pub fn wants_awake(mode: KeepAwake, playing: bool, youtube_player_playing: bool) -> bool {
+    match mode {
+        KeepAwake::Off => false,
+        KeepAwake::YoutubePlayer => youtube_player_playing,
+        KeepAwake::WhilePlaying => playing || youtube_player_playing,
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[derive(Default)]
 pub enum RepeatMode {
@@ -54,6 +72,7 @@ pub struct Settings {
     #[serde(default)]
     pub library_grid: bool,
     pub adaptive_color: bool,
+    pub keep_awake: KeepAwake,
     #[serde(default = "haptics_default")]
     pub haptics: bool,
     pub crossfade: f32,
@@ -107,6 +126,7 @@ impl Default for Settings {
             battery_saver: false,
             library_grid: false,
             adaptive_color: true,
+            keep_awake: KeepAwake::default(),
             haptics: true,
             crossfade: 4.0,
             jiosaavn_base: String::new(),
@@ -216,5 +236,19 @@ mod data_dir_tests {
         assert_eq!(super::default_base(None, None, Some(data.clone()), Some(home.clone())), data);
         assert_eq!(super::default_base(Some(roaming.clone()), None, None, Some(home)), roaming);
         assert_eq!(super::default_base(None, None, Some(PathBuf::from("relative")), None), PathBuf::from("."));
+    }
+}
+
+#[cfg(test)]
+mod keep_awake_tests {
+    use super::{wants_awake, KeepAwake};
+
+    #[test]
+    fn the_screen_stays_on_only_when_the_chosen_rule_says_so() {
+        assert!(!wants_awake(KeepAwake::Off, true, true));
+        assert!(wants_awake(KeepAwake::YoutubePlayer, false, true));
+        assert!(!wants_awake(KeepAwake::YoutubePlayer, true, false));
+        assert!(wants_awake(KeepAwake::WhilePlaying, true, false));
+        assert!(!wants_awake(KeepAwake::WhilePlaying, false, false));
     }
 }

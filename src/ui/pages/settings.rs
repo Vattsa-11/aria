@@ -247,6 +247,26 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
                     });
                 });
                 }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    use crate::settings::KeepAwake;
+                    ui.add_space(10.0);
+                    ui.label(RichText::new("Keep the screen on").size(13.5).color(pal.muted));
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        for (mode, label) in [(KeepAwake::Off, "Off"), (KeepAwake::YoutubePlayer, "YouTube-player songs"), (KeepAwake::WhilePlaying, "Whenever playing")] {
+                            if crate::ui::widgets::pill_button(ui, label, app.settings.keep_awake == mode, accent, &pal) && app.settings.keep_awake != mode {
+                                app.settings.keep_awake = mode;
+                                app.touch_settings();
+                            }
+                        }
+                    });
+                    ui.label(
+                        RichText::new("Songs that play in the YouTube player pause when the phone locks, so keeping the screen on keeps them going. Pressing the power button still locks the phone.")
+                            .size(12.0)
+                            .color(pal.muted),
+                    );
+                }
                 if crate::platform::touch_device() {
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {

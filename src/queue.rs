@@ -146,6 +146,31 @@ impl Queue {
         }
     }
 
+    pub fn remove_context(&mut self, index: usize) -> bool {
+        if index >= self.context.len() || self.context_pos == Some(index) {
+            return false;
+        }
+        self.context.remove(index);
+        self.order.retain(|entry| *entry != index);
+        for entry in &mut self.order {
+            if *entry > index {
+                *entry -= 1;
+            }
+        }
+        if let Some(position) = self.context_pos {
+            if position > index {
+                self.context_pos = Some(position - 1);
+            }
+        }
+        true
+    }
+
+    pub fn clear_upcoming_context(&mut self) -> usize {
+        let mut upcoming: Vec<usize> = self.context_preview().into_iter().map(|(index, _)| index).collect();
+        upcoming.sort_unstable_by(|a, b| b.cmp(a));
+        upcoming.into_iter().filter(|index| self.remove_context(*index)).count()
+    }
+
     pub fn mark_context_playing(&mut self, index: usize) {
         self.context_pos = Some(index);
     }
@@ -259,6 +284,35 @@ impl PlayStack {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn removing_an_upcoming_song_keeps_the_rest_in_order_and_the_playing_one_safe() {
+        let mut queue = super::Queue::new(false, crate::settings::RepeatMode::Off);
+        let track = |id: u64| crate::model::Track { id, title: format!("t{id}"), artist: "a".into(), album: String::new(), duration: None, source: crate::model::TrackSource::Yt { id: id.to_string() }, thumb: None, provider_meta: None };
+        queue.set_context((0..5).map(track).collect(), "list");
+        queue.rebuild_order();
+        queue.mark_context_playing(1);
+        assert!(!queue.remove_context(1), "the playing song cannot be removed from under the player");
+        assert!(queue.remove_context(3));
+        let upcoming: Vec<u64> = queue.context_preview().into_iter().map(|(_, song)| song.id).collect();
+        assert_eq!(upcoming, vec![2, 4]);
+        assert!(queue.remove_context(0));
+        assert_eq!(queue.context_pos, Some(0));
+        assert_eq!(queue.context[queue.context_pos.unwrap()].id, 1, "the playing marker follows its song");
+        assert!(!queue.remove_context(99));
+    }
+
+    #[test]
+    fn clearing_upcoming_songs_leaves_what_has_played() {
+        let mut queue = super::Queue::new(false, crate::settings::RepeatMode::Off);
+        let track = |id: u64| crate::model::Track { id, title: format!("t{id}"), artist: "a".into(), album: String::new(), duration: None, source: crate::model::TrackSource::Yt { id: id.to_string() }, thumb: None, provider_meta: None };
+        queue.set_context((0..6).map(track).collect(), "list");
+        queue.rebuild_order();
+        queue.mark_context_playing(2);
+        assert_eq!(queue.clear_upcoming_context(), 3);
+        assert!(queue.context_preview().is_empty());
+        assert_eq!(queue.context.len(), 3);
+    }
+
     use super::*;
     use std::path::PathBuf;
     use std::time::Duration;

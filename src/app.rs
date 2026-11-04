@@ -53,6 +53,7 @@ pub struct ImportState {
     pub source: String,
     pub error: Option<String>,
     pub url: String,
+    pub pasted: String,
 
     pub target: Option<usize>,
     pub new_playlist: String,
@@ -173,6 +174,8 @@ pub struct App {
     pub mini: crate::miniplayer::MiniState,
     play_gen: u64,
     pub adding_songs: bool,
+    #[cfg(target_arch = "wasm32")]
+    awake_on: bool,
     listen: crate::listen::ListenMeter,
     listen_clock: Option<Instant>,
     #[cfg(target_arch = "wasm32")]
@@ -323,6 +326,8 @@ impl App {
             mini: crate::miniplayer::MiniState::default(),
             play_gen: 0,
             adding_songs: false,
+            #[cfg(target_arch = "wasm32")]
+            awake_on: false,
             listen: crate::listen::ListenMeter::default(),
             listen_clock: None,
             #[cfg(target_arch = "wasm32")]
@@ -698,10 +703,11 @@ impl App {
     }
 
     pub fn clear_user_queue(&mut self) {
-        let count = self.queue.user_len();
+        let mut count = self.queue.user_len();
         while self.queue.user_len() > 0 {
             self.queue.remove_user(0);
         }
+        count += self.queue.clear_upcoming_context();
         if count > 0 {
             self.notify("Queue cleared");
             self.persist(true);
@@ -993,6 +999,17 @@ impl App {
     }
 
     pub fn import_file(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            crate::install::pick_file();
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.import_file_native();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn import_file_native(&mut self) {
         let file = crate::dialogs::pick_file("Track lists", &["csv", "txt", "m3u", "m3u8"]);
         let Some(path) = file else {
             return;
@@ -1008,6 +1025,21 @@ impl App {
             .extension()
             .map(|ext| ext.eq_ignore_ascii_case("csv"))
             .unwrap_or(false);
+        let source = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        self.import_text(&text, is_csv, source);
+    }
+
+    pub fn import_pasted(&mut self) {
+        let text = std::mem::take(&mut self.import.pasted);
+        let is_csv = text.lines().next().is_some_and(|line| line.to_lowercase().contains("track name") || line.to_lowercase().contains("artist name"));
+        self.import_text(&text, is_csv, "Pasted list".to_string());
+    }
+
+    pub fn import_text(&mut self, text: &str, is_csv: bool, source: String) {
+        let text = text.to_string();
         let mut entries = if is_csv {
             crate::import::parse_csv(&text)
         } else {
@@ -1017,13 +1049,9 @@ impl App {
             entries = crate::import::parse_text_list(&text);
         }
         if entries.is_empty() {
-            self.fail("No tracks found in that file", None);
+            self.fail("No songs found. Use one song per line, like: Title - Artist", None);
             return;
         }
-        let source = path
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_default();
         self.begin_import(entries, source);
     }
 
@@ -2673,7 +2701,7 @@ impl App {
     }
 
     pub fn maybe_crossfade(&mut self) {
-        let secs = self.settings.crossfade;
+        let secs = handoff_window(self.settings.crossfade, !crate::platform::native_engine() && crate::platform::touch_device());
         if secs <= 0.05 {
             return;
         }
@@ -2704,6 +2732,15 @@ impl App {
         self.play_advance(true);
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn sync_awake(&mut self) {
+        let want = settings::wants_awake(self.settings.keep_awake, self.is_playing(), crate::install::youtube_player_playing());
+        if want != self.awake_on {
+            self.awake_on = want;
+            crate::install::keep_awake(want);
+        }
+    }
+
     fn count_listening(&mut self) {
         let now = Instant::now();
         let gap = self.listen_clock.replace(now).map(|before| now.duration_since(before).as_secs_f64()).unwrap_or(0.0);
@@ -2718,6 +2755,8 @@ impl App {
     }
 
     pub fn tick(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        self.sync_awake();
         self.count_listening();
         self.update_sleep_timer();
         self.maybe_crossfade();
@@ -3223,6 +3262,14 @@ pub fn transition_secs(setting: f32, manual: bool) -> f32 {
     }
 }
 
+pub fn handoff_window(crossfade: f32, plain_audio: bool) -> f32 {
+    if plain_audio {
+        0.3
+    } else {
+        crossfade
+    }
+}
+
 pub fn effective_state(audio: AudioState, resolving: bool) -> AudioState {
     if resolving {
         AudioState::Loading
@@ -3237,6 +3284,10 @@ impl eframe::App for App {
         {
             self.sync_history();
             media_controls::pump();
+            if let Some((name, text)) = crate::install::take_picked() {
+                let is_csv = name.to_lowercase().ends_with(".csv");
+                self.import_text(&text, is_csv, name);
+            }
         }
         self.tick();
         self.ensure_media(frame);
@@ -3291,6 +3342,14 @@ impl eframe::App for App {
 
 #[cfg(test)]
 mod state_tests {
+    #[test]
+    fn phones_hand_off_in_the_last_instant_instead_of_cutting_the_song_short() {
+        assert_eq!(super::handoff_window(4.0, true), 0.3);
+        assert_eq!(super::handoff_window(0.0, true), 0.3);
+        assert_eq!(super::handoff_window(4.0, false), 4.0);
+        assert_eq!(super::handoff_window(0.0, false), 0.0);
+    }
+
     use super::{effective_state, resume_position_ms, transition_secs, warm_is_usable, warm_targets};
     use std::time::Duration;
     use crate::player::AudioState;

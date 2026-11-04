@@ -24,6 +24,16 @@ pub fn yt_state() -> Option<serde_json::Value> {
     serde_json::from_str(&call("ariaYTState")?.as_string()?).ok()
 }
 
+pub fn pick_file() {
+    call_named("ariaPickFile");
+}
+
+pub fn take_picked() -> Option<(String, String)> {
+    let raw = call("ariaTakePicked")?.as_string().filter(|text| !text.is_empty())?;
+    let json: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    Some((json["name"].as_str()?.to_string(), json["text"].as_str()?.to_string()))
+}
+
 pub fn take_media() -> String {
     call("ariaTakeMedia").and_then(|value| value.as_string()).unwrap_or_default()
 }
@@ -57,6 +67,14 @@ pub fn update_ready() -> bool {
 
 pub fn apply_update() {
     let _ = call("ariaApplyUpdate");
+}
+
+pub fn youtube_player_playing() -> bool {
+    yt_state().and_then(|info| info["state"].as_str().map(|state| state == "playing")).unwrap_or(false)
+}
+
+pub fn keep_awake(on: bool) {
+    call_args("ariaKeepAwake", &[wasm_bindgen::JsValue::from_bool(on)]);
 }
 
 pub fn haptic() {

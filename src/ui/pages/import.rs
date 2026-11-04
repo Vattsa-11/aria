@@ -22,13 +22,18 @@ pub fn import(app: &mut App, ui: &mut egui::Ui) {
         );
         ui.add_space(12.0);
         ui.label(
-            RichText::new("Exportify CSV, a text list, or a playlist URL")
+            RichText::new(if crate::platform::native_engine() { "Exportify CSV, a text list, or a playlist URL" } else { "Exportify CSV or a list of songs" })
                 .size(13.0)
                 .color(pal.muted),
         );
     });
     ui.add_space(10.0);
 
+    if !crate::platform::native_engine() {
+        if pill_button(ui, "Choose file", false, accent, &pal) {
+            app.import_file();
+        }
+    } else {
     if ui.available_width() < 560.0 {
         ui.add_sized(
             [ui.available_width(), 38.0],
@@ -62,6 +67,23 @@ pub fn import(app: &mut App, ui: &mut egui::Ui) {
                 app.import_url();
             }
         });
+    }
+    }
+    ui.add_space(10.0);
+    ui.label(RichText::new("Or paste a list, one song per line (Title - Artist)").size(13.0).color(pal.muted));
+    ui.add_space(4.0);
+    ui.add(
+        TextEdit::multiline(&mut app.import.pasted)
+            .desired_rows(4)
+            .desired_width(f32::INFINITY)
+            .hint_text("Kesariya - Arijit Singh\nTum Hi Ho - Arijit Singh")
+            .text_color(pal.text),
+    );
+    if !app.import.pasted.trim().is_empty() {
+        ui.add_space(6.0);
+        if pill_button(ui, "Import list", true, accent, &pal) {
+            app.import_pasted();
+        }
     }
 
     if app.import.loading_playlist {
@@ -278,10 +300,11 @@ fn empty_state(ui: &mut egui::Ui, pal: &Palette) {
         );
         ui.add_space(6.0);
         ui.label(
-            RichText::new(
-                "Exportify CSV, a plain text list (Artist - Title), or a playlist URL. \
-                 Every match is reviewed before anything is added.",
-            )
+            RichText::new(if crate::platform::native_engine() {
+                "Exportify CSV, a plain text list (Artist - Title), or a playlist URL. Every match is reviewed before anything is added."
+            } else {
+                "Exportify CSV or a plain text list (Title - Artist). Every match is reviewed before anything is added."
+            })
             .size(14.0)
             .color(pal.muted),
         );
@@ -290,7 +313,15 @@ fn empty_state(ui: &mut egui::Ui, pal: &Palette) {
 
 fn footer(app: &mut App, ui: &mut egui::Ui, pal: &Palette, accent: Color32) {
     ui.separator();
-    ui.horizontal(|ui| {
+    let narrow = ui.available_width() < 520.0;
+    let layout = |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui)| {
+        if narrow {
+            ui.horizontal_wrapped(|ui| add(ui));
+        } else {
+            ui.horizontal(|ui| add(ui));
+        }
+    };
+    layout(ui, &mut |ui: &mut egui::Ui| {
         ui.label(RichText::new("Add to").size(13.0).color(pal.muted));
         let names: Vec<String> = app
             .playlists
@@ -325,17 +356,23 @@ fn footer(app: &mut App, ui: &mut egui::Ui, pal: &Palette, accent: Color32) {
             });
         if app.import.target.is_none() {
             ui.add_sized(
-                [200.0, 32.0],
+                [if narrow { 150.0 } else { 200.0 }, 32.0],
                 TextEdit::singleline(&mut app.import.new_playlist)
                     .hint_text("New playlist name")
                     .text_color(pal.text),
             );
         }
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        if narrow {
             if pill_button(ui, "Add to playlist", true, accent, pal) {
                 app.apply_import();
             }
-        });
+        } else {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if pill_button(ui, "Add to playlist", true, accent, pal) {
+                    app.apply_import();
+                }
+            });
+        }
     });
 }
 

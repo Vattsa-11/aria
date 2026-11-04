@@ -1193,6 +1193,7 @@ fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width
     let mut adding = false;
     let mut clear = false;
     let user_count = app.queue.user_len();
+    let has_upcoming = !app.queue.context_preview().is_empty();
     let context_name = if app.queue.context_name.is_empty() {
         "context".to_string()
     } else {
@@ -1223,7 +1224,7 @@ fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width
                 if widgets::pill_button(ui, "Add songs", false, accent, pal) {
                     adding = true;
                 }
-                if user_count > 0 && widgets::pill_button(ui, "Clear", false, accent, pal) {
+                if (user_count > 0 || has_upcoming) && widgets::pill_button(ui, "Clear", false, accent, pal) {
                     clear = true;
                 }
             });
@@ -1333,6 +1334,7 @@ fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width
                 ui.label(RichText::new("Nothing queued").size(13.0).color(pal.muted));
             } else {
                 let mut jump = None;
+                let mut drop_context = None;
                 ui.scope(|ui| {
                         for (index, track) in preview {
                             let (rect, response) = ui.allocate_exact_size(
@@ -1347,10 +1349,19 @@ fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width
                                 egui::pos2(rect.min.x + 8.0, rect.min.y + 4.0),
                                 egui::pos2(rect.max.x - 8.0, rect.max.y - 4.0),
                             );
+                            let remove_rect = Rect::from_center_size(egui::pos2(rect.max.x - 26.0, rect.center().y), Vec2::splat(44.0));
+                            let remove_response = ui.interact(remove_rect, ui.scope_id().with(("context-remove", index)), Sense::click());
+                            icons::draw(
+                                ui.painter(),
+                                Rect::from_center_size(remove_rect.center(), Vec2::splat(20.0)),
+                                Icon::Close,
+                                if remove_response.hovered() { pal.text } else { pal.muted },
+                            );
+                            let room = inner.width() - 10.0 - 40.0;
                             let title_font = TextStyle::Body.resolve(ui.style());
                             let artist_font = TextStyle::Small.resolve(ui.style());
-                            let title = widgets::fit_text_to(ui.painter(), &track.title, &title_font, pal.text, inner.width() - 10.0);
-                            let artist = widgets::fit_text_to(ui.painter(), track.display_artist(), &artist_font, pal.muted, inner.width() - 10.0);
+                            let title = widgets::fit_text_to(ui.painter(), &track.title, &title_font, pal.text, room);
+                            let artist = widgets::fit_text_to(ui.painter(), track.display_artist(), &artist_font, pal.muted, room);
                             ui.painter().text(
                                 egui::pos2(inner.min.x, inner.center().y - 8.0),
                                 Align2::LEFT_CENTER,
@@ -1365,12 +1376,17 @@ fn queue_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, width
                                 artist_font,
                                 pal.muted,
                             );
-                            if response.clicked() {
+                            if remove_response.clicked() {
+                                drop_context = Some(index);
+                            } else if response.clicked() {
                                 jump = Some(index);
                             }
                         }
                     });
-                if let Some(index) = jump {
+                if let Some(index) = drop_context {
+                    app.queue.remove_context(index);
+                    app.persist(true);
+                } else if let Some(index) = jump {
                     app.jump_queue_context(index);
                 }
             }

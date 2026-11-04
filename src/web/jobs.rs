@@ -277,14 +277,35 @@ async fn run(job: Job, events: Sender<Event>) {
             };
             emit(&events, Event::Lyrics { track_id: track.id, result });
         }
-        Job::Radio { seed, .. } => emit(&events, Event::Radio { seed, tracks: Vec::new(), error: Some("Radio is not available in the browser".to_string()) }),
+        Job::Radio { seed, .. } => {
+            let (tracks, error) = match get_json(&format!("/api/search?source=youtube&q={}", encode(&seed))).await {
+                Ok(json) => {
+                    let tracks = tracks_from(&json);
+                    if tracks.is_empty() { (tracks, Some("No more songs found".to_string())) } else { (tracks, None) }
+                }
+                Err(err) => (Vec::new(), Some(err)),
+            };
+            emit(&events, Event::Radio { seed, tracks, error });
+        }
         Job::Download { track, .. } => {
             let result = download_track(&track, &events).await;
             emit(&events, Event::Download { track, result });
         }
         Job::FixMatch { track } => emit(&events, Event::FixMatch { track_id: track.id, alternatives: Vec::new(), error: Some("Not available in the browser".to_string()) }),
-        Job::ImportMatch { token, index, .. } => emit(&events, Event::ImportMatch { token, index, tracks: Vec::new(), error: Some("Importing is not available in the browser yet".to_string()) }),
-        Job::ImportPlaylist { token, .. } => emit(&events, Event::ImportPlaylist { token, tracks: Vec::new(), error: Some("Importing is not available in the browser yet".to_string()) }),
+        Job::ImportMatch { token, index, query, duration } => {
+            let (mut tracks, error) = match get_json(&format!("/api/search?source=youtube&q={}", encode(&query))).await {
+                Ok(json) => (tracks_from(&json), None),
+                Err(err) => (Vec::new(), Some(err)),
+            };
+            let (title_hint, artist_hint) = match query.split_once(' ') {
+                Some((artist, title)) if !artist.is_empty() => (title, artist),
+                _ => (query.as_str(), ""),
+            };
+            crate::matchscore::rank(&mut tracks, title_hint, artist_hint, duration);
+            tracks.truncate(5);
+            emit(&events, Event::ImportMatch { token, index, tracks, error });
+        }
+        Job::ImportPlaylist { token, .. } => emit(&events, Event::ImportPlaylist { token, tracks: Vec::new(), error: Some("Playlist links are not supported in the browser yet. Paste your songs as a list instead.".to_string()) }),
         Job::EnsureYtDlp | Job::DownloadYtDlp | Job::CheckUpdate | Job::DownloadUpdate { .. } => {}
     }
 }

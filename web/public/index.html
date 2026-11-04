@@ -212,18 +212,9 @@ window.ariaApplyUpdate = () => location.reload();
   };
   const names = { "-1": "buffering", 0: "ended", 1: "playing", 2: "paused", 3: "buffering", 5: "buffering" };
   const touch = () => window.ariaWake?.();
-  let awake = null;
   let hideTimer = null;
-  const keepAwake = async () => {
-    try {
-      if (!awake && navigator.wakeLock) {
-        awake = await navigator.wakeLock.request("screen");
-        awake.addEventListener("release", () => { awake = null; });
-      }
-    } catch {}
-  };
-  const letSleep = () => { try { awake && awake.release(); } catch {} awake = null; };
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && info.state === "playing") keepAwake(); });
+  const keepAwake = () => {};
+  const letSleep = () => {};
   const show = () => { clearTimeout(hideTimer); const element = document.getElementById("aria-yt-box"); if (element) element.style.display = "block"; };
   const settle = (state) => {
     if (state === "playing" || state === "buffering") { show(); }
@@ -296,6 +287,39 @@ window.ariaEmbed = (id) => {
   box.append(bar, frame);
   document.body.append(box);
 };
+(function () {
+  let wanted = false;
+  let lock = null;
+  const hold = async () => {
+    try {
+      if (wanted && !lock && !document.hidden && navigator.wakeLock) {
+        lock = await navigator.wakeLock.request("screen");
+        lock.addEventListener("release", () => { lock = null; });
+      }
+    } catch {}
+  };
+  window.ariaKeepAwake = (on) => {
+    wanted = !!on;
+    if (wanted) hold();
+    else { try { lock && lock.release(); } catch {} lock = null; }
+  };
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) hold(); });
+})();
+window.__ariaPicked = "";
+window.ariaPickFile = () => {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".csv,.txt,.m3u,.m3u8,text/plain,text/csv";
+  input.onchange = async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    const text = await file.text();
+    window.__ariaPicked = JSON.stringify({ name: file.name, text });
+    window.ariaWake?.();
+  };
+  input.click();
+};
+window.ariaTakePicked = () => { const value = window.__ariaPicked; window.__ariaPicked = ""; return value; };
 window.ariaOpen = (url) => { try { window.open(url, "_blank", "noopener"); } catch {} };
 window.ariaHaptic = (ms) => { try { navigator.vibrate?.(Number(ms) || 12); } catch {} };
 window.ariaOfflineUrl = async (id) => {
