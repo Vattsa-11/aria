@@ -4,7 +4,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 use web_time::Instant;
 
-use egui::{ColorImage, Context, TextureHandle, TextureOptions};
+use egui::{Color32, ColorImage, Context, TextureHandle, TextureOptions};
 
 use crate::settings::data_dir;
 
@@ -122,7 +122,33 @@ impl ThumbQueue {
 
 }
 
+pub fn dominant_color(image: &ColorImage) -> Color32 {
+    let [width, height] = image.size;
+    let step = ((width * height) / 900).max(1);
+    let (mut weighted, mut weight, mut plain, mut count) = ([0.0f32; 3], 0.0f32, [0.0f32; 3], 0.0f32);
+    for pixel in image.pixels.iter().step_by(step) {
+        let rgb = [pixel.r() as f32, pixel.g() as f32, pixel.b() as f32];
+        let high = rgb.iter().cloned().fold(0.0, f32::max);
+        let low = rgb.iter().cloned().fold(255.0, f32::min);
+        let vividness = if high > 0.0 { (high - low) / high } else { 0.0 } * (high / 255.0);
+        for channel in 0..3 {
+            weighted[channel] += rgb[channel] * vividness;
+            plain[channel] += rgb[channel];
+        }
+        weight += vividness;
+        count += 1.0;
+    }
+    if count == 0.0 {
+        return Color32::from_rgb(40, 40, 48);
+    }
+    let rgb = if weight > 1.0 { [weighted[0] / weight, weighted[1] / weight, weighted[2] / weight] } else { [plain[0] / count, plain[1] / count, plain[2] / count] };
+    let luma = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+    let scale = if luma > 85.0 { 85.0 / luma } else { 1.0 };
+    Color32::from_rgb((rgb[0] * scale) as u8, (rgb[1] * scale) as u8, (rgb[2] * scale) as u8)
+}
+
 pub struct ThumbnailCache {
+    tints: HashMap<u64, Color32>,
     textures: HashMap<u64, TextureHandle>,
     order: VecDeque<u64>,
     pending: Vec<u64>,
@@ -133,6 +159,7 @@ pub struct ThumbnailCache {
 impl Default for ThumbnailCache {
     fn default() -> Self {
         Self {
+            tints: HashMap::new(),
             textures: HashMap::new(),
             order: VecDeque::new(),
             pending: Vec::new(),
@@ -152,7 +179,15 @@ impl ThumbnailCache {
         Some(handle)
     }
 
+    pub fn tint(&self, id: u64) -> Option<Color32> {
+        self.tints.get(&id).copied()
+    }
+
     pub fn insert(&mut self, id: u64, ctx: &Context, image: ColorImage) {
+        if self.tints.len() > 600 {
+            self.tints.clear();
+        }
+        self.tints.insert(id, dominant_color(&image));
         let handle = ctx.load_texture(
             format!("aria-thumb-{id}"),
             image,
@@ -195,6 +230,22 @@ impl ThumbnailCache {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dominant_color_follows_the_vivid_part_of_a_cover_and_stays_dark_enough_for_white_text() {
+        let mut pixels = vec![egui::Color32::from_rgb(235, 235, 235); 64 * 64];
+        for pixel in pixels.iter_mut().take(64 * 20) {
+            *pixel = egui::Color32::from_rgb(220, 30, 40);
+        }
+        let image = egui::ColorImage { size: [64, 64], pixels, source_size: egui::vec2(64.0, 64.0) };
+        let tint = super::dominant_color(&image);
+        assert!(tint.r() > tint.g() + 30 && tint.r() > tint.b() + 30, "{tint:?}");
+        let luma = 0.2126 * tint.r() as f32 + 0.7152 * tint.g() as f32 + 0.0722 * tint.b() as f32;
+        assert!(luma <= 90.0, "{luma}");
+        let grey = egui::ColorImage { size: [8, 8], pixels: vec![egui::Color32::from_gray(200); 64], source_size: egui::vec2(8.0, 8.0) };
+        let tint = super::dominant_color(&grey);
+        assert!(tint.r().abs_diff(tint.g()) < 3 && tint.r() <= 90);
+    }
+
     use super::*;
 
     #[test]
