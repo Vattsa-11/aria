@@ -98,8 +98,17 @@ impl ThumbQueue {
         let (lock, ready) = &*self.inner;
         lock.lock().unwrap_or_else(|err| err.into_inner()).push(job);
         ready.notify_one();
+        #[cfg(target_arch = "wasm32")]
+        crate::jobs::pump_thumbs();
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub fn pop(&self) -> Option<ThumbJob> {
+        let (lock, _) = &*self.inner;
+        lock.lock().unwrap_or_else(|err| err.into_inner()).pop()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn pop_blocking(&self) -> ThumbJob {
         let (lock, ready) = &*self.inner;
         let mut jobs = lock.lock().unwrap_or_else(|err| err.into_inner());

@@ -16,6 +16,7 @@ struct Row {
     index: usize,
     clicked: bool,
     menu: Response,
+    like: Response,
 }
 
 struct ResultRow<'a> {
@@ -158,6 +159,7 @@ fn result_row(ui: &mut Ui, index: usize, data: ResultRow<'_>) -> Row {
         index,
         clicked: response.clicked() && !menu_response.clicked() && !like_response.clicked(),
         menu: menu_response,
+        like: like_response,
     }
 }
 
@@ -330,6 +332,7 @@ pub fn search(app: &mut App, ui: &mut Ui) {
         .to_vec();
     app.prefetch_thumbs(&window);
 
+    let liked_now: Vec<usize> = rows.iter().filter(|row| row.like.clicked()).map(|row| row.index).collect();
     let menu_rows: Vec<(Response, crate::model::Track)> = rows
         .into_iter()
         .filter_map(|row| {
@@ -337,6 +340,12 @@ pub fn search(app: &mut App, ui: &mut Ui) {
         })
         .collect();
     crate::ui::pages::rows::row_menus(app, menu_rows, crate::ui::pages::rows::MenuKind::Standard, &pal);
+
+    for index in liked_now {
+        if let Some(track) = app.search.results.get(index).cloned() {
+            app.toggle_like_track(&track);
+        }
+    }
 
     if let Some(index) = play {
         app.play_search_result(index);

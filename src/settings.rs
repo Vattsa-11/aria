@@ -141,6 +141,19 @@ fn settings_path() -> PathBuf {
     data_dir().join("settings.json")
 }
 
+#[cfg(target_arch = "wasm32")]
+pub fn load() -> Settings {
+    crate::storage::get("aria.settings").and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn save(settings: &Settings) {
+    if let Ok(raw) = serde_json::to_string(settings) {
+        crate::storage::set("aria.settings", &raw);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn load() -> Settings {
     let path = settings_path();
     let Ok(raw) = std::fs::read_to_string(&path) else {
@@ -149,6 +162,7 @@ pub fn load() -> Settings {
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn save(settings: &Settings) {
     let dir = data_dir();
     if std::fs::create_dir_all(&dir).is_err() {

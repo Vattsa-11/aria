@@ -2,6 +2,7 @@ import * as saavn from "./saavn.ts";
 import * as youtube from "./youtube.ts";
 import { retryAfter, type Namespace } from "./limit.ts";
 import { boundedRange, CHUNK } from "./range.ts";
+import { allowedImage, MAX_IMAGE_BYTES } from "./image.ts";
 
 export { RateLimiter } from "./limiter.ts";
 
@@ -46,6 +47,15 @@ async function route(request: Request, url: URL): Promise<Response> {
     case "/api/trending": {
       const language = (url.searchParams.get("lang") ?? "hindi").replace(/[^a-z]/gi, "").slice(0, 20) || "hindi";
       return json(await saavn.trending(language), 200, "public, max-age=900");
+    }
+    case "/api/image": {
+      const target = allowedImage(url.searchParams.get("u") ?? "");
+      if (!target) return json({ error: "image host not allowed" }, 400);
+      const upstream = await fetch(target.toString(), { headers: { "User-Agent": "Mozilla/5.0 Aria-Web" } });
+      const type = upstream.headers.get("content-type") ?? "";
+      const size = Number(upstream.headers.get("content-length") ?? 0);
+      if (!upstream.ok || !type.startsWith("image/") || size > MAX_IMAGE_BYTES) return json({ error: "image unavailable" }, 502);
+      return new Response(upstream.body, { headers: { "content-type": type, "cache-control": "public, max-age=604800" } });
     }
     case "/api/audio": {
       const id = url.searchParams.get("id") ?? "";

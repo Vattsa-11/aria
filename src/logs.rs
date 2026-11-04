@@ -11,6 +11,12 @@ pub fn log(level: &str, message: &str) {
     log_to(&crate::settings::data_dir(), level, message);
 }
 
+#[cfg(target_arch = "wasm32")]
+pub fn log_to(_dir: &Path, level: &str, message: &str) {
+    web_sys::console::warn_1(&format!("[{level}] {message}").into());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn log_to(dir: &Path, level: &str, message: &str) {
     let _ = std::fs::create_dir_all(dir);
     let path = dir.join("aria.log");

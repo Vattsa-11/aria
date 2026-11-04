@@ -1,13 +1,18 @@
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread::{self, JoinHandle};
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 use web_time::Instant;
 
 use crate::model::{Playlist, Track};
 use crate::queue::Queue;
 
+#[cfg(not(target_arch = "wasm32"))]
 const COALESCE_MS: u64 = 180;
+#[cfg(not(target_arch = "wasm32"))]
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub enum Write {
@@ -91,11 +96,13 @@ impl Batch {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Writer {
     tx: Sender<Write>,
     handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Clone for Writer {
     fn clone(&self) -> Self {
         Self {
@@ -105,6 +112,7 @@ impl Clone for Writer {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Writer {
     pub fn send(&self, write: Write) {
         let _ = self.tx.send(write);
@@ -130,10 +138,12 @@ impl Writer {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn spawn() -> Writer {
     spawn_with(Write::apply)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn spawn_with<F>(apply: F) -> Writer
 where
     F: Fn(Write) + Send + 'static,
@@ -187,6 +197,26 @@ where
         tx,
         handle: Arc::new(Mutex::new(worker)),
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+pub struct Writer;
+
+#[cfg(target_arch = "wasm32")]
+impl Writer {
+    pub fn send(&self, write: Write) {
+        if !matches!(write, Write::Stop) {
+            write.apply();
+        }
+    }
+
+    pub fn shutdown(&self) {}
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn spawn() -> Writer {
+    Writer
 }
 
 #[cfg(test)]

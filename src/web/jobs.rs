@@ -1,3 +1,4 @@
+use std::cell::{Cell, RefCell};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::OnceLock;
 
@@ -38,13 +39,55 @@ impl JobTx {
     }
 }
 
+thread_local! {
+    static THUMBS: RefCell<Option<(crate::cache::ThumbQueue, Sender<Event>)>> = const { RefCell::new(None) };
+    static IN_FLIGHT: Cell<usize> = const { Cell::new(0) };
+}
+
+const THUMB_PARALLEL: usize = 4;
+
 pub fn spawn() -> Jobs {
     let (event_tx, rx) = channel::<Event>();
-    Jobs {
-        tx: JobTx { events: event_tx.clone() },
-        thumbs: crate::cache::ThumbQueue::default(),
-        event_tx,
-        rx,
+    let thumbs = crate::cache::ThumbQueue::default();
+    THUMBS.with(|slot| *slot.borrow_mut() = Some((thumbs.clone(), event_tx.clone())));
+    Jobs { tx: JobTx { events: event_tx.clone() }, thumbs, event_tx, rx }
+}
+
+async fn fetch_bytes(path: &str) -> Result<Vec<u8>, String> {
+    let window = web_sys::window().ok_or("no window")?;
+    let response = JsFuture::from(window.fetch_with_str(path)).await.map_err(|_| "offline".to_string())?;
+    let response: web_sys::Response = response.dyn_into().map_err(|_| "unexpected response".to_string())?;
+    if !response.ok() {
+        return Err(format!("status {}", response.status()));
+    }
+    let buffer = JsFuture::from(response.array_buffer().map_err(|_| "unreadable".to_string())?).await.map_err(|_| "unreadable".to_string())?;
+    Ok(js_sys::Uint8Array::new(&buffer).to_vec())
+}
+
+pub fn pump_thumbs() {
+    loop {
+        if IN_FLIGHT.with(Cell::get) >= THUMB_PARALLEL {
+            return;
+        }
+        let next = THUMBS.with(|slot| slot.borrow().as_ref().and_then(|(queue, events)| queue.pop().map(|job| (job, events.clone()))));
+        let Some((job, events)) = next else { return };
+        IN_FLIGHT.with(|count| count.set(count.get() + 1));
+        spawn_local(async move {
+            let image = if job.source.starts_with("http") {
+                match fetch_bytes(&format!("/api/image?u={}", encode(&job.source))).await.and_then(|bytes| crate::cache::decode(&bytes, job.letterboxed)) {
+                    Ok(image) => Some(image),
+                    Err(reason) => {
+                        web_sys::console::warn_1(&format!("thumbnail {}: {reason}", job.track_id).into());
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            emit(&events, Event::Thumb { track_id: job.track_id, image });
+            IN_FLIGHT.with(|count| count.set(count.get().saturating_sub(1)));
+            pump_thumbs();
+        });
     }
 }
 

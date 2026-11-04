@@ -45,3 +45,13 @@ test("without a limiter, or when it fails, requests are allowed", async () => {
   const broken = { idFromName: () => 1, get: () => ({ hit: async () => { throw new Error("down"); } }) };
   assert.equal(await retryAfter(broken, request, "/api/search"), 0);
 });
+
+test("image requests have their own, larger budget", async () => {
+  const windows = new Map<string, SlidingWindow>();
+  const ns = namespace(windows);
+  const request = new Request("https://x", { headers: { "cf-connecting-ip": "3.3.3.3" } });
+  let blocked = 0;
+  for (let i = 0; i < 605; i++) if ((await retryAfter(ns, request, "/api/image")) > 0) blocked++;
+  assert.equal(blocked, 5);
+  assert.ok(windows.has("3.3.3.3:image"));
+});

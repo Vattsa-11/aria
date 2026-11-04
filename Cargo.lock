@@ -127,6 +127,7 @@ dependencies = [
  "raw-window-handle",
  "rfd",
  "rodio",
+ "rsqlite-vfs 0.1.1",
  "rusqlite",
  "serde",
  "serde_json",

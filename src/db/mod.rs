@@ -86,10 +86,17 @@ pub struct SavedState {
 static INITIALISED: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
 
 fn open() -> Result<Connection, String> {
-    let dir = data_dir();
-    std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
-    let path = dir.join("library.db");
+    #[cfg(target_arch = "wasm32")]
+    let path = std::path::PathBuf::from("library.db");
+    #[cfg(not(target_arch = "wasm32"))]
+    let path = {
+        let dir = data_dir();
+        std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+        dir.join("library.db")
+    };
     let conn = Connection::open(&path).map_err(|err| err.to_string())?;
+    #[cfg(target_arch = "wasm32")]
+    conn.execute_batch("PRAGMA synchronous=off;").map_err(|err| err.to_string())?;
     conn.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(|err| err.to_string())?;
     let mut ready = INITIALISED.lock().unwrap_or_else(|err| err.into_inner());

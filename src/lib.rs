@@ -42,6 +42,12 @@ mod settings;
 mod sleep;
 mod stats;
 mod suggest;
+#[cfg(target_arch = "wasm32")]
+#[path = "web/storage.rs"]
+mod storage;
+#[cfg(target_arch = "wasm32")]
+#[path = "web/os.rs"]
+mod os;
 mod ui;
 mod writer;
 mod ytdlp;
@@ -143,6 +149,15 @@ pub async fn start(canvas_id: String) -> Result<(), wasm_bindgen::JsValue> {
         .ok_or("canvas not found")?
         .dyn_into::<web_sys::HtmlCanvasElement>()
         .map_err(|_| "not a canvas")?;
+    let second_tab = web_sys::window()
+        .and_then(|window| js_sys::Reflect::get(&window, &"__ariaSecondTab".into()).ok())
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    if second_tab {
+        web_sys::console::warn_1(&"Aria is open in another tab: library changes in this tab will not be saved".into());
+    } else if let Err(error) = sqlite_wasm_vfs::relaxed_idb::install::<os::WebOs>(&sqlite_wasm_vfs::relaxed_idb::RelaxedIdbCfg::default(), true).await {
+        web_sys::console::warn_1(&format!("Saved library unavailable, using memory: {error:?}").into());
+    }
     eframe::WebRunner::new()
         .start(
             canvas,
