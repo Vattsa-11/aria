@@ -508,6 +508,7 @@ mod native {
 }
 
 type ResizeStart = (egui::ResizeDirection, Rect, Pos2, bool);
+type MoveStart = (Rect, Pos2, bool);
 
 fn screen_cursor(ui: &Ui, outer: Rect, local: Option<Pos2>, touch: bool) -> Option<Pos2> {
     if touch {
@@ -592,13 +593,52 @@ fn resize_borders(ui: &mut Ui, rect: Rect, pal: &Palette) {
 }
 
 fn background_drag(ui: &mut Ui, rect: Rect) {
-
-    let response = ui.interact(rect, ui.scope_id().with("mini-bg"), Sense::drag());
-    let origin = ui.input(|input| input.pointer.press_origin());
+    use egui::ViewportCommand;
+    let drag_id = ui.scope_id().with("mini-bg");
+    let response = ui.interact(rect, drag_id, Sense::drag());
+    let (origin, latest, down, outer, touching) = ui.input(|input| {
+        (
+            if input.pointer.primary_pressed() { input.pointer.press_origin() } else { None },
+            input.pointer.latest_pos(),
+            input.pointer.primary_down(),
+            input.viewport().outer_rect,
+            input.any_touches(),
+        )
+    });
     let on_edge = origin.is_some_and(|pos| zone_at(rect, pos).is_some() || close_hit(rect).contains(pos));
+
+    // Manual move on Windows, mirroring `resize_borders`: `ViewportCommand::StartDrag`
+    // goes through Win32's caption modal loop (WM_NCLBUTTONDOWN/HTCAPTION), which is
+    // mouse-only and never engages for touch/pen input (Surface Pro etc.). Track the
+    // drag start and move the window with `OuterPosition` each frame instead.
     if response.drag_started() && !on_edge {
-        ui.ctx()
-            .send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        let manual_all = cfg!(windows) && outer.is_some();
+        if manual_all {
+            let start_outer = outer.unwrap_or(rect);
+            let start_cursor = screen_cursor(ui, start_outer, origin, touching);
+            if let Some(start_cursor) = start_cursor {
+                let start: MoveStart = (start_outer, start_cursor, touching);
+                ui.data_mut(|data| data.insert_temp(drag_id, start));
+            }
+        } else {
+            ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+        }
+    }
+
+    let active: Option<MoveStart> = ui.data(|data| data.get_temp(drag_id));
+    if let Some((start_outer, start_cursor, touch)) = active {
+        if down || (!touch && native::left_button_down()) {
+            let current_outer = outer.unwrap_or(start_outer);
+            if let Some(cursor) = screen_cursor(ui, current_outer, latest, touch) {
+                let target = start_outer.min + (cursor - start_cursor);
+                if (target - current_outer.min).length() > 0.5 {
+                    ui.ctx().send_viewport_cmd(ViewportCommand::OuterPosition(target));
+                }
+            }
+            ui.ctx().request_repaint();
+        } else {
+            ui.data_mut(|data| data.remove::<MoveStart>(drag_id));
+        }
     }
 }
 
