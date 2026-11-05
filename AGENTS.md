@@ -27,11 +27,12 @@ If you changed anything the web build uses, also: `npm --prefix web run build:wa
   - `warm_targets` and `warm_is_usable` moved there as `targets` and `is_usable`, with their tests.
 
 - Step 2: search paging moved to `src/search_state.rs` (`SearchState` with `begin`, `next_page`, `receive`, `change_source`, tests for merging and exhaustion).
+- Step 3: sleep timer stepping moved to `SleepTimer::step` in `src/sleep.rs` (returns `Step` actions; the dead `sleep_stopping` field is gone). The listen clock and the resume-point rule moved to `src/listen.rs` (`tick_now`, `resume_point`).
 
 ## Remaining steps, in order
 1. (done) Search paging moved to `src/search_state.rs`.
-2. Sleep timer: already a type in `src/sleep.rs`. Move the `App` methods that drive it next to it.
-3. Listen meter: `src/listen.rs` exists. Move `count_listening` and `remember_position` into small functions that take a snapshot and return actions.
+2. (done) Sleep timer.
+3. (done) Listen meter.
 4. UI-only state into one struct `UiState`: `queue_open`, `lyrics_open`, `now_playing_open`, `adding_songs`, `toast`, `toast_action`, `lyrics_paste`, `page`. Many UI files read these, so do it as a mechanical rename (`app.queue_open` to `app.ui.queue_open`) in its own commit.
 5. Split `agent_execute` (a very long `match`) into one function per command group (playback, queue, playlists, downloads, settings, diagnostics). The command list lives in `src/agent.rs` (`COMMANDS`); every command there needs an arm.
 6. Later: library/playlists, downloads, lyrics, media controls.

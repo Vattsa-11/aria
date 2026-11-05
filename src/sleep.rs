@@ -3,6 +3,12 @@ use web_time::Instant;
 
 pub const FADE_SECS: f32 = 5.0;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Step {
+    SetVolume(f32),
+    Stop { restore: f32 },
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct SleepTimer {
     pub until: Option<Instant>,
@@ -87,6 +93,26 @@ impl SleepTimer {
             .unwrap_or(false)
     }
 
+    pub fn step(&mut self, volume: f32) -> Vec<Step> {
+        let mut steps = Vec::new();
+        if !self.active() {
+            return steps;
+        }
+        if !self.fading() && self.deadline_reached() {
+            self.begin_fade(volume);
+        }
+        if self.fading() {
+            let target = self.fade_volume(volume);
+            if target > 0.001 {
+                steps.push(Step::SetVolume(target));
+            }
+            if self.fade_finished() {
+                steps.push(Step::Stop { restore: self.take_saved_volume() });
+            }
+        }
+        steps
+    }
+
     pub fn take_saved_volume(&mut self) -> f32 {
         let saved = self.saved_volume;
         self.clear();
@@ -140,5 +166,21 @@ mod tests {
         assert_eq!(timer.fade_volume(0.8), 0.0);
         assert!((timer.take_saved_volume() - 0.8).abs() < 1e-6);
         assert!(!timer.active());
+    }
+
+    #[test]
+    fn stepping_does_nothing_until_the_deadline_then_fades_and_stops() {
+        let mut timer = SleepTimer::default();
+        assert!(timer.step(0.8).is_empty());
+        timer.arm_minutes(10);
+        assert!(timer.step(0.8).is_empty());
+        timer.until = Some(Instant::now() - Duration::from_secs(1));
+        let first = timer.step(0.8);
+        assert!(matches!(first.as_slice(), [Step::SetVolume(v)] if *v > 0.7));
+        timer.fade_started = Some(Instant::now() - Duration::from_secs(9));
+        let last = timer.step(0.8);
+        assert_eq!(last, vec![Step::Stop { restore: 0.8 }]);
+        assert!(!timer.active());
+        assert!(timer.step(0.8).is_empty());
     }
 }

@@ -1,5 +1,6 @@
 #[derive(Default)]
 pub struct ListenMeter {
+    clock: Option<web_time::Instant>,
     track: Option<u64>,
     listened: f64,
     logged: bool,
@@ -8,6 +9,11 @@ pub struct ListenMeter {
 const LONGEST_GAP: f64 = 1.5;
 const UNKNOWN_LENGTH_SECS: f64 = 30.0;
 const SHORTEST_COUNT: f64 = 5.0;
+
+pub fn resume_point(position_ms: u64, duration_ms: Option<u64>) -> Option<u64> {
+    let near_end = duration_ms.is_some_and(|total| position_ms + 3_000 >= total);
+    (position_ms > 1_000 && !near_end).then_some(position_ms)
+}
 
 pub fn needed(duration: Option<f64>) -> f64 {
     match duration.filter(|secs| secs.is_finite() && *secs > 0.0) {
@@ -21,6 +27,12 @@ impl ListenMeter {
         self.track = Some(track);
         self.listened = 0.0;
         self.logged = false;
+    }
+
+    pub fn tick_now(&mut self, track: u64, playing: bool, duration: Option<f64>) -> bool {
+        let now = web_time::Instant::now();
+        let gap = self.clock.replace(now).map(|before| now.duration_since(before).as_secs_f64()).unwrap_or(0.0);
+        self.tick(track, playing, gap, duration)
     }
 
     pub fn tick(&mut self, track: u64, playing: bool, seconds_since_last: f64, duration: Option<f64>) -> bool {
@@ -42,6 +54,14 @@ mod tests {
 
     fn listen(meter: &mut ListenMeter, track: u64, seconds: u32, duration: Option<f64>) -> u32 {
         (0..seconds).filter(|_| meter.tick(track, true, 1.0, duration)).count() as u32
+    }
+
+    #[test]
+    fn the_resume_point_ignores_the_first_second_and_the_last_three() {
+        assert_eq!(resume_point(500, Some(200_000)), None);
+        assert_eq!(resume_point(60_000, Some(200_000)), Some(60_000));
+        assert_eq!(resume_point(198_000, Some(200_000)), None);
+        assert_eq!(resume_point(60_000, None), Some(60_000));
     }
 
     #[test]

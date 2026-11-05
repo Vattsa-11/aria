@@ -138,7 +138,6 @@ pub struct App {
     pub stats: crate::db::ListeningStats,
     pub stats_dirty: bool,
     pub sleep: crate::sleep::SleepTimer,
-    pub sleep_stopping: bool,
     pub help_open: bool,
     pub lyrics_open: bool,
     pub lyrics_lines: Vec<crate::lyrics::LyricLine>,
@@ -173,7 +172,6 @@ pub struct App {
     #[cfg(target_arch = "wasm32")]
     awake_on: bool,
     listen: crate::listen::ListenMeter,
-    listen_clock: Option<Instant>,
     #[cfg(target_arch = "wasm32")]
     last_layers: u32,
     skip_on_fail: bool,
@@ -297,7 +295,6 @@ impl App {
             stats: crate::db::ListeningStats::default(),
             stats_dirty: true,
             sleep: crate::sleep::SleepTimer::default(),
-            sleep_stopping: false,
             help_open: false,
             lyrics_open: false,
             lyrics_lines: Vec::new(),
@@ -334,7 +331,6 @@ impl App {
             #[cfg(target_arch = "wasm32")]
             awake_on: false,
             listen: crate::listen::ListenMeter::default(),
-            listen_clock: None,
             #[cfg(target_arch = "wasm32")]
             last_layers: 0,
             skip_on_fail: false,
@@ -2745,23 +2741,14 @@ impl App {
     }
 
     pub fn update_sleep_timer(&mut self) {
-        if !self.sleep.active() {
-            return;
-        }
-        if !self.sleep.fading() && self.sleep.deadline_reached() {
-            self.sleep.begin_fade(self.settings.volume);
-        }
-        if self.sleep.fading() {
-            let target = self.sleep.fade_volume(self.settings.volume);
-            if target > 0.001 {
-                self.player.send(Command::SetVolume(target));
-            }
-            if self.sleep.fade_finished() {
-                self.player.send(Command::Pause);
-                let restored = self.sleep.take_saved_volume();
-                self.player.send(Command::SetVolume(restored));
-                self.sleep_stopping = false;
-                self.notify("Sleep timer stopped playback");
+        for step in self.sleep.step(self.settings.volume) {
+            match step {
+                crate::sleep::Step::SetVolume(volume) => self.player.send(Command::SetVolume(volume)),
+                crate::sleep::Step::Stop { restore } => {
+                    self.player.send(Command::Pause);
+                    self.player.send(Command::SetVolume(restore));
+                    self.notify("Sleep timer stopped playback");
+                }
             }
         }
     }
@@ -2868,13 +2855,12 @@ impl App {
     }
 
     fn count_listening(&mut self) {
-        let now = Instant::now();
-        let gap = self.listen_clock.replace(now).map(|before| now.duration_since(before).as_secs_f64()).unwrap_or(0.0);
         let Some(track) = self.current.clone() else {
+            self.listen.tick_now(0, false, None);
             return;
         };
         let playing = self.is_playing();
-        if self.listen.tick(track.id, playing, gap, self.duration()) {
+        if self.listen.tick_now(track.id, playing, self.duration()) {
             crate::db::log_play(&track);
             self.play_ok += 1;
             self.stats_dirty = true;
@@ -2912,9 +2898,7 @@ impl App {
         if !matches!(snapshot.state, AudioState::Playing | AudioState::Paused) {
             return;
         }
-        let ms = snapshot.position.as_millis() as u64;
-        let near_end = snapshot.duration.is_some_and(|d| ms + 3_000 >= d.as_millis() as u64);
-        self.pending_start_ms = (ms > 1_000 && !near_end).then_some(ms);
+        self.pending_start_ms = crate::listen::resume_point(snapshot.position.as_millis() as u64, snapshot.duration.map(|d| d.as_millis() as u64));
     }
 
     pub fn tick(&mut self) {
