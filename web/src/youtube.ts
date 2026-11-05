@@ -62,14 +62,50 @@ export function pickAudio(response: Json): string {
   return aac.reduce((best, format) => (format.bitrate > best.bitrate ? format : best)).url;
 }
 
-export async function search(query: string, limit = 20): Promise<Song[]> {
-  const response = await fetch(SEARCH, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Origin: "https://music.youtube.com", "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0" },
-    body: JSON.stringify({ context: { client: { clientName: "WEB_REMIX", clientVersion: "1.20250310.01.00", hl: "en", gl: "US" } }, query, params: SONGS_FILTER }),
-  });
-  if (!response.ok) throw new Error(`YouTube search answered ${response.status}`);
-  return parseSearch(await response.json(), limit);
+export function continuationOf(response: Json): string | null {
+  const text = JSON.stringify(response);
+  return /"nextContinuationData":\{"continuation":"([^"]+)"/.exec(text)?.[1] ?? /"continuationCommand":\{"token":"([^"]+)"/.exec(text)?.[1] ?? null;
+}
+
+const SEARCH_HEADERS = { "Content-Type": "application/json", Origin: "https://music.youtube.com", "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0" };
+const WEB_REMIX = { client: { clientName: "WEB_REMIX", clientVersion: "1.20250310.01.00", hl: "en", gl: "US" } };
+
+type Walk = { songs: Song[]; token: string | null | undefined; until: number };
+const walks = new Map<string, Walk>();
+
+export async function search(query: string, limit = 60): Promise<Song[]> {
+  const key = query.toLowerCase();
+  const now = Date.now();
+  let walk = walks.get(key);
+  if (!walk || walk.until < now) {
+    if (walks.size > 60) walks.clear();
+    walk = { songs: [], token: undefined, until: now + 10 * 60_000 };
+    walks.set(key, walk);
+  }
+  const seen = new Set(walk.songs.map((song) => song.id));
+  while (walk.songs.length < limit && walk.token !== null) {
+    const first = walk.token === undefined;
+    const token: string | undefined = walk.token;
+    const url: string = first ? SEARCH : `${SEARCH}&ctoken=${encodeURIComponent(token!)}&continuation=${encodeURIComponent(token!)}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: SEARCH_HEADERS,
+      body: JSON.stringify(first ? { context: WEB_REMIX, query, params: SONGS_FILTER } : { context: WEB_REMIX }),
+    });
+    if (!response.ok) {
+      if (first) throw new Error(`YouTube search answered ${response.status}`);
+      break;
+    }
+    const json: Json = await response.json();
+    for (const song of parseSearch(json, 1000)) {
+      if (!seen.has(song.id)) {
+        seen.add(song.id);
+        walk.songs.push(song);
+      }
+    }
+    walk.token = continuationOf(json);
+  }
+  return walk.songs.slice(0, limit);
 }
 
 const TTL_OK = 25 * 60_000;

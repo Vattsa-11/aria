@@ -84,7 +84,7 @@ async function call(query: string): Promise<Json> {
   return JSON.parse(await response.text());
 }
 
-export async function search(query: string, limit = 20): Promise<Song[]> {
+export async function search(query: string, limit = 40): Promise<Song[]> {
   return parseSearch(await call(`__call=search.getResults&q=${encodeURIComponent(query)}&n=${limit}`));
 }
 

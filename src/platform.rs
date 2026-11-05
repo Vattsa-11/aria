@@ -11,6 +11,14 @@ pub fn touch_device() -> bool {
         .is_some_and(|platform| is_touch(&platform))
 }
 
+#[cfg(target_arch = "wasm32")]
+pub fn volume_fades() -> bool {
+    web_sys::window()
+        .and_then(|window| js_sys::Reflect::get(&window, &"__ariaPlatform".into()).ok())
+        .and_then(|value| value.as_string())
+        .is_none_or(|platform| platform != "ios")
+}
+
 #[cfg(target_os = "android")]
 pub fn touch_device() -> bool {
     true

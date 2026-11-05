@@ -347,6 +347,10 @@ pub fn search(app: &mut App, ui: &mut Ui) {
             }
         });
 
+    if visible.end + 6 >= total {
+        app.search_more();
+    }
+
     let window: Vec<crate::model::Track> = app.search.results
         [visible.start.saturating_sub(6)..(visible.end + 14).min(total)]
         .to_vec();

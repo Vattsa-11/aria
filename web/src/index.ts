@@ -120,7 +120,8 @@ async function route(request: Request, url: URL): Promise<Response> {
     case "/api/search": {
       const query = (url.searchParams.get("q") ?? "").trim().slice(0, 120);
       if (!query) return json([]);
-      const songs = await remembered(`search:${source}:${query.toLowerCase()}`, 300, () => (source === "youtube" ? youtube.search(query) : saavn.search(query)));
+      const limit = Math.min(150, Math.max(1, Math.floor(Number(url.searchParams.get("limit"))) || 20));
+      const songs = await remembered(`search:${source}:${limit}:${query.toLowerCase()}`, 300, () => (source === "youtube" ? youtube.search(query, limit) : saavn.search(query, limit)));
       return json(songs, 200, "public, max-age=300");
     }
     case "/api/trending": {

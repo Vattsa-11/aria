@@ -236,8 +236,8 @@ async fn download_track(track: &Track, events: &Sender<Event>) -> Result<std::pa
 
 async fn run(job: Job, events: Sender<Event>) {
     match job {
-        Job::Search { query, provider, .. } => {
-            let path = format!("/api/search?source={}&q={}", source_of(provider), encode(&query));
+        Job::Search { query, provider, limit } => {
+            let path = format!("/api/search?source={}&q={}&limit={}", source_of(provider), encode(&query), limit);
             let (mut results, error) = match get_json(&path).await {
                 Ok(json) => (tracks_from(&json), None),
                 Err(err) => (Vec::new(), Some(err)),

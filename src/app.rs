@@ -75,9 +75,14 @@ pub struct SearchState {
     pub running: bool,
     pub error: Option<String>,
     pub started: bool,
+    pub limit: usize,
+    pub more: bool,
+    pub exhausted: bool,
 
     pub provider: Option<crate::provider::ProviderName>,
 }
+
+pub const SEARCH_PAGE: usize = 15;
 
 pub struct App {
     pub settings: Settings,
@@ -1698,10 +1703,29 @@ impl App {
         self.search.running = true;
         self.search.started = true;
         self.search.error = None;
+        self.search.limit = SEARCH_PAGE;
+        self.search.more = false;
+        self.search.exhausted = false;
         let provider = self.search.provider;
         let _ = self.jobs.tx.send(Job::Search {
             query,
-            limit: 20,
+            limit: SEARCH_PAGE,
+            provider,
+        });
+    }
+
+    pub fn search_more(&mut self) {
+        let query = self.search.query.trim().to_string();
+        if query.is_empty() || self.search.running || self.search.exhausted || self.search.results.is_empty() || self.is_offline() {
+            return;
+        }
+        self.search.running = true;
+        self.search.more = true;
+        self.search.limit = self.search.results.len().max(self.search.limit) + SEARCH_PAGE;
+        let provider = self.search.provider;
+        let _ = self.jobs.tx.send(Job::Search {
+            query,
+            limit: self.search.limit,
             provider,
         });
     }
@@ -2773,7 +2797,7 @@ impl App {
     }
 
     pub fn maybe_crossfade(&mut self) {
-        let secs = handoff_window(self.settings.crossfade, !crate::platform::native_engine() && crate::platform::touch_device());
+        let secs = handoff_window(self.settings.crossfade, plain_handoff());
         if secs <= 0.05 {
             return;
         }
@@ -2911,14 +2935,29 @@ impl App {
                     }
                     self.search.running = false;
                     self.search.started = true;
+                    let more = std::mem::take(&mut self.search.more);
                     match error {
+                        Some(message) if more => {
+                            self.search.exhausted = true;
+                            crate::logs::error(&message);
+                        }
                         Some(message) => {
                             self.search.error = Some(message.clone());
                             self.search.results.clear();
                             self.fail(message, Some(ToastAction::Search));
                         }
+                        None if more => {
+                            let known: std::collections::HashSet<u64> = self.search.results.iter().map(|track| track.id).collect();
+                            let fresh: Vec<Track> = results.into_iter().filter(|track| !known.contains(&track.id)).collect();
+                            if fresh.is_empty() {
+                                self.search.exhausted = true;
+                            } else {
+                                self.search.results.extend(fresh);
+                            }
+                        }
                         None => {
                             self.search.error = None;
+                            self.search.exhausted = results.len() < SEARCH_PAGE;
                             self.search.results = results;
                         }
                     }
@@ -3399,6 +3438,17 @@ pub fn smart_fade(base: f32, from: Option<crate::pace::Features>, to: Option<cra
             (base * (1.0 - jump * 1.2 - tempo * 0.5).clamp(0.4, 1.0)).max(1.5_f32.min(base))
         }
         _ => base,
+    }
+}
+
+fn plain_handoff() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        crate::platform::touch_device() && !crate::platform::volume_fades()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        false
     }
 }
 

@@ -238,7 +238,8 @@ impl Graph {
             let _ = self.context.resume();
         }
         let now = self.context.current_time();
-        let crossfade = !self.plain && request.fade > Duration::from_millis(50) && self.is_playing(self.active);
+        let can_fade = !self.plain || crate::platform::volume_fades();
+        let crossfade = can_fade && request.fade > Duration::from_millis(50) && self.is_playing(self.active);
         let idle_ready = self.decks[1 - self.active].preloaded.as_deref() == Some(stream.url.as_str());
         let next = if crossfade || idle_ready { 1 - self.active } else { self.active };
         let old = self.active;
@@ -265,7 +266,9 @@ impl Graph {
                 rejected.forget();
             }
         }
-        if crossfade {
+        if crossfade && self.plain {
+            self.element_fade(next, old, seconds);
+        } else if crossfade {
             Self::ramp(&self.decks[next].gain, |t| equal_power(t).1, seconds, now);
             Self::ramp(&self.decks[old].gain, |t| equal_power(t).0, seconds, now);
             let element = self.decks[old].element.clone();
@@ -277,6 +280,9 @@ impl Graph {
             }
             stop.forget();
         } else {
+            if self.plain {
+                self.decks[next].element.set_volume(self.volume.clamp(0.0, 1.0) as f64);
+            }
             let _ = self.decks[next].gain.gain().cancel_scheduled_values(now);
             self.decks[next].gain.gain().set_value(1.0);
             if old != next {
@@ -284,6 +290,33 @@ impl Graph {
             }
         }
         self.active = next;
+    }
+
+    fn element_fade(&self, next: usize, old: usize, seconds: f64) {
+        let incoming = self.decks[next].element.clone();
+        let outgoing = self.decks[old].element.clone();
+        let target = self.volume.clamp(0.0, 1.0) as f64;
+        incoming.set_volume(0.0);
+        let started = js_sys::Date::now();
+        let total = (seconds * 1000.0).max(50.0);
+        let Some(window) = web_sys::window() else { return };
+        let handle = std::rc::Rc::new(std::cell::Cell::new(0));
+        let stop_handle = handle.clone();
+        let tick_window = window.clone();
+        let step = Closure::<dyn FnMut()>::new(move || {
+            let t = ((js_sys::Date::now() - started) / total).clamp(0.0, 1.0);
+            let (fade_out, fade_in) = equal_power(t as f32);
+            incoming.set_volume(target * fade_in as f64);
+            outgoing.set_volume(target * fade_out as f64);
+            if t >= 1.0 {
+                let _ = outgoing.pause();
+                outgoing.set_volume(target);
+                tick_window.clear_interval_with_handle(stop_handle.get());
+            }
+        });
+        let id = window.set_interval_with_callback_and_timeout_and_arguments_0(step.as_ref().unchecked_ref(), 50).unwrap_or(0);
+        handle.set(id);
+        step.forget();
     }
 
     fn preload(&mut self, url: String) {
