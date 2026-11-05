@@ -97,9 +97,15 @@ impl PlayerHandle {
         }));
         let shared = snapshot.clone();
         let audio_eq = eq.clone();
-        let _ = thread::Builder::new()
+        let failure_events = events.clone();
+        let spawned = thread::Builder::new()
             .name("aria-audio".into())
             .spawn(move || run(rx, shared, volume, events, audio_eq, normalize));
+        if let Err(err) = spawned {
+            let _ = failure_events.send(Event::AudioError {
+                message: format!("Could not start the audio engine: {err}"),
+            });
+        }
         Self { tx, snapshot }
     }
 
@@ -162,7 +168,15 @@ fn run(
     let mut backlog: std::collections::VecDeque<Command> = std::collections::VecDeque::new();
 
     loop {
-        while let Some(command) = backlog.pop_front().or_else(|| rx.try_recv().ok()) {
+        let mut owner_gone = false;
+        while let Some(command) = backlog.pop_front().or_else(|| match rx.try_recv() {
+            Ok(command) => Some(command),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                owner_gone = true;
+                None
+            }
+            Err(_) => None,
+        }) {
             match command {
                 Command::Play(request) => {
                     let mut queued = Vec::new();
@@ -340,6 +354,9 @@ fn run(
             }
         }
 
+        if owner_gone {
+            break;
+        }
         thread::sleep(Duration::from_millis(40));
     }
 }

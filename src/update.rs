@@ -1,13 +1,16 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-const LATEST: &str = "https://api.github.com/repos/magi8101/aria/releases/latest";
+const REPO: &str = "Vattsa-11/aria";
+const LATEST: &str = "https://api.github.com/repos/Vattsa-11/aria/releases/latest";
+const TRUSTED_DOWNLOADS: &str = "https://github.com/Vattsa-11/aria/releases/download/";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Asset {
     pub name: String,
     pub url: String,
     pub size: u64,
+    pub sum_url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -71,24 +74,31 @@ fn platform() -> (&'static str, &'static str) {
 pub fn release_from_json(text: &str) -> Result<Release, String> {
     let value: serde_json::Value = serde_json::from_str(text).map_err(|err| err.to_string())?;
     let version = value["tag_name"].as_str().ok_or("no tag_name in the release")?.trim_start_matches('v').to_string();
-    let assets: Vec<Asset> = value["assets"]
+    let listed: Vec<(String, String, u64)> = value["assets"]
         .as_array()
         .map(|list| {
             list.iter()
                 .filter_map(|item| {
-                    Some(Asset {
-                        name: item["name"].as_str()?.to_string(),
-                        url: item["browser_download_url"].as_str()?.to_string(),
-                        size: item["size"].as_u64().unwrap_or(0),
-                    })
+                    let url = item["browser_download_url"].as_str()?.to_string();
+                    url.starts_with(TRUSTED_DOWNLOADS).then(|| (item["name"].as_str().unwrap_or_default().to_string(), url, item["size"].as_u64().unwrap_or(0)))
                 })
                 .collect()
         })
         .unwrap_or_default();
+    let assets: Vec<Asset> = listed
+        .iter()
+        .filter(|(name, _, _)| !name.ends_with(".sha256") && name != "SHA256SUMS.txt")
+        .map(|(name, url, size)| Asset {
+            name: name.clone(),
+            url: url.clone(),
+            size: *size,
+            sum_url: listed.iter().find(|(other, _, _)| *other == format!("{name}.sha256")).map(|(_, sum, _)| sum.clone()),
+        })
+        .collect();
     let (os, arch) = platform();
     let has_dpkg = which_dpkg();
     Ok(Release {
-        page: value["html_url"].as_str().unwrap_or("https://github.com/magi8101/aria/releases/latest").to_string(),
+        page: value["html_url"].as_str().unwrap_or("https://github.com/Vattsa-11/aria/releases/latest").to_string(),
         asset: pick_asset(&assets, os, arch, has_dpkg),
         version,
     })
@@ -116,6 +126,9 @@ pub fn dir() -> PathBuf {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn download(asset: &Asset) -> Result<PathBuf, String> {
+    if !asset.url.starts_with(TRUSTED_DOWNLOADS) {
+        return Err(format!("The download is not hosted by {REPO}"));
+    }
     let folder = dir();
     std::fs::create_dir_all(&folder).map_err(|err| err.to_string())?;
     let target = folder.join(&asset.name);
@@ -125,6 +138,11 @@ pub fn download(asset: &Asset) -> Result<PathBuf, String> {
         .header("User-Agent", concat!("Aria/", env!("CARGO_PKG_VERSION")))
         .call()
         .map_err(|err| format!("Download failed: {err}"))?;
+    let expected = match &asset.sum_url {
+        Some(url) => fetch_digest(url)?,
+        None => return Err("This release has no published checksum for the download, so Aria will not install it".to_string()),
+    };
+    let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
     let mut file = std::fs::File::create(&part).map_err(|err| err.to_string())?;
     let mut reader = response.body_mut().as_reader();
     let mut buffer = vec![0u8; 64 * 1024];
@@ -135,6 +153,7 @@ pub fn download(asset: &Asset) -> Result<PathBuf, String> {
             break;
         }
         file.write_all(&buffer[..read]).map_err(|err| err.to_string())?;
+        sha2::Digest::update(&mut hasher, &buffer[..read]);
         written += read as u64;
     }
     drop(file);
@@ -142,8 +161,36 @@ pub fn download(asset: &Asset) -> Result<PathBuf, String> {
         let _ = std::fs::remove_file(&part);
         return Err(format!("Download was cut short ({written} of {} bytes)", asset.size));
     }
+    let actual = hex(&sha2::Digest::finalize(hasher));
+    if !actual.eq_ignore_ascii_case(&expected) {
+        let _ = std::fs::remove_file(&part);
+        return Err("The download does not match its published checksum, so it was discarded".to_string());
+    }
     std::fs::rename(&part, &target).map_err(|err| err.to_string())?;
     Ok(target)
+}
+
+pub fn digest_from(text: &str) -> Option<String> {
+    let token = text.split_whitespace().next()?;
+    (token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit())).then(|| token.to_ascii_lowercase())
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fetch_digest(url: &str) -> Result<String, String> {
+    if !url.starts_with(TRUSTED_DOWNLOADS) {
+        return Err(format!("The checksum is not hosted by {REPO}"));
+    }
+    let mut response = crate::http::fetch_agent()
+        .get(url)
+        .header("User-Agent", concat!("Aria/", env!("CARGO_PKG_VERSION")))
+        .call()
+        .map_err(|err| format!("Could not fetch the checksum: {err}"))?;
+    let text = response.body_mut().read_to_string().map_err(|err| err.to_string())?;
+    digest_from(&text).ok_or_else(|| "The published checksum is not valid".to_string())
 }
 
 pub fn launch(path: &Path) -> Result<bool, String> {
@@ -171,7 +218,7 @@ mod tests {
     use super::*;
 
     fn asset(name: &str) -> Asset {
-        Asset { name: name.to_string(), url: format!("https://x/{name}"), size: 10 }
+        Asset { name: name.to_string(), url: format!("https://x/{name}"), size: 10, sum_url: None }
     }
 
     #[test]
@@ -204,9 +251,32 @@ mod tests {
 
     #[test]
     fn parses_a_github_release_payload() {
-        let json = r#"{"tag_name":"v1.2.3","html_url":"https://github.com/magi8101/aria/releases/tag/v1.2.3","assets":[{"name":"a.msi","browser_download_url":"https://x/a.msi","size":5}]}"#;
-        let release = release_from_json(json).unwrap();
+        let base = "https://github.com/Vattsa-11/aria/releases/download/v1.2.3";
+        let name = format!("aria-{}-{}.tar.gz", platform().0, platform().1);
+        let json = format!(
+            r#"{{"tag_name":"v1.2.3","html_url":"https://github.com/Vattsa-11/aria/releases/tag/v1.2.3","assets":[{{"name":"{name}","browser_download_url":"{base}/{name}","size":5}},{{"name":"{name}.sha256","browser_download_url":"{base}/{name}.sha256","size":90}},{{"name":"evil.msi","browser_download_url":"https://evil.example/evil.msi","size":5}}]}}"#
+        );
+        let release = release_from_json(&json).unwrap();
         assert_eq!(release.version, "1.2.3");
         assert!(release_from_json("{}").is_err());
+        if let Some(asset) = release.asset {
+            assert_eq!(asset.sum_url.as_deref(), Some(format!("{base}/{name}.sha256").as_str()));
+            assert!(asset.url.starts_with(TRUSTED_DOWNLOADS));
+        }
+    }
+
+    #[test]
+    fn assets_from_other_hosts_are_ignored() {
+        let json = r#"{"tag_name":"v9.9.9","assets":[{"name":"aria-windows-x86_64.msi","browser_download_url":"https://evil.example/aria-windows-x86_64.msi","size":5}]}"#;
+        assert!(release_from_json(json).unwrap().asset.is_none());
+    }
+
+    #[test]
+    fn checksums_must_be_64_hex_digits() {
+        let good = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  aria.msi\n";
+        assert_eq!(digest_from(good).as_deref(), Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"));
+        assert!(digest_from("zzzz  aria.msi").is_none());
+        assert!(digest_from("").is_none());
+        assert_eq!(hex(&[0, 15, 255]), "000fff");
     }
 }

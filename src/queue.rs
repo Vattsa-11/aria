@@ -48,6 +48,14 @@ pub enum Advance {
     End,
 }
 
+fn fresh_seed() -> u64 {
+    let nanos = web_time::SystemTime::now()
+        .duration_since(web_time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u64)
+        .unwrap_or(0);
+    (nanos ^ 0x9E37_79B9_7F4A_7C15).max(1)
+}
+
 impl Default for Queue {
     fn default() -> Self {
         Self::new(false, RepeatMode::Off)
@@ -64,7 +72,7 @@ impl Queue {
             order: Vec::new(),
             shuffle,
             repeat,
-            rng: 0x9E37_79B9_7F4A_7C15,
+            rng: fresh_seed(),
         };
         queue.rebuild_order();
         queue
@@ -212,7 +220,7 @@ impl Queue {
     }
 
     pub fn has_following(&self, automatic: bool) -> bool {
-        !matches!(self.clone().advance(automatic), Advance::End)
+        (automatic && self.repeat == RepeatMode::One) || !self.user.is_empty() || self.next_context_index().is_some()
     }
 
     pub fn context_preview(&self) -> Vec<(usize, &Track)> {

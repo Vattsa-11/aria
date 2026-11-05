@@ -39,21 +39,17 @@ pub fn playback_track(track: &crate::model::Track, local: Option<PathBuf>) -> cr
 fn existing_in(folder: &Path, track_id: u64) -> Option<PathBuf> {
     let dotted = format!("{track_id}.");
     let named = format!("{track_id} - ");
-    let entries = std::fs::read_dir(folder).ok()?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = path.file_name()?.to_string_lossy().to_string();
-        if !name.starts_with(&dotted) && !name.starts_with(&named) {
-            continue;
-        }
-        if name.ends_with(".part") || name.ends_with(".ytdl") {
-            continue;
-        }
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-    None
+    let mut found: Vec<PathBuf> = std::fs::read_dir(folder)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            let name = path.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default();
+            (name.starts_with(&dotted) || name.starts_with(&named)) && !name.ends_with(".part") && !name.ends_with(".ytdl") && path.is_file()
+        })
+        .collect();
+    found.sort();
+    found.into_iter().next()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
