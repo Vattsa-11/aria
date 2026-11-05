@@ -68,21 +68,7 @@ pub enum ToastAction {
     Resolve(Track),
 }
 
-#[derive(Default)]
-pub struct SearchState {
-    pub query: String,
-    pub results: Vec<Track>,
-    pub running: bool,
-    pub error: Option<String>,
-    pub started: bool,
-    pub limit: usize,
-    pub more: bool,
-    pub exhausted: bool,
-
-    pub provider: Option<crate::provider::ProviderName>,
-}
-
-pub const SEARCH_PAGE: usize = 15;
+pub use crate::search_state::SearchState;
 
 pub struct App {
     pub settings: Settings,
@@ -707,15 +693,11 @@ impl App {
     }
 
     pub fn search_is_showing_results(&self) -> bool {
-        self.search.started || !self.search.results.is_empty()
+        self.search.showing_results()
     }
 
     pub fn reset_search(&mut self) {
-        self.search.query.clear();
-        self.search.results.clear();
-        self.search.started = false;
-        self.search.running = false;
-        self.search.error = None;
+        self.search.reset();
     }
 
     pub fn begin_adding_songs(&mut self) {
@@ -1695,56 +1677,29 @@ impl App {
             return;
         }
         if self.is_offline() {
-            self.search.running = false;
-            self.search.started = true;
-            self.search.results.clear();
-            self.search.error = Some(
-                "You're offline. Downloaded and local tracks are still playable from Downloads."
-                    .to_string(),
-            );
+            self.search.fail_offline("You're offline. Downloaded and local tracks are still playable from Downloads.");
             return;
         }
         crate::suggest::push_recent(&mut self.settings.recent_searches, &query);
         self.touch_settings();
-        self.search.running = true;
-        self.search.started = true;
-        self.search.error = None;
-        self.search.limit = SEARCH_PAGE;
-        self.search.more = false;
-        self.search.exhausted = false;
+        let limit = self.search.begin();
         let provider = self.search.provider;
-        let _ = self.jobs.tx.send(Job::Search {
-            query,
-            limit: SEARCH_PAGE,
-            provider,
-        });
+        let _ = self.jobs.tx.send(Job::Search { query, limit, provider });
     }
 
     pub fn search_more(&mut self) {
-        let query = self.search.query.trim().to_string();
-        if query.is_empty() || self.search.running || self.search.exhausted || self.search.results.is_empty() || self.is_offline() {
+        if self.is_offline() {
             return;
         }
-        self.search.running = true;
-        self.search.more = true;
-        self.search.limit = self.search.results.len().max(self.search.limit) + SEARCH_PAGE;
-        let provider = self.search.provider;
-        let _ = self.jobs.tx.send(Job::Search {
-            query,
-            limit: self.search.limit,
-            provider,
-        });
+        let query = self.search.query.trim().to_string();
+        if let Some(limit) = self.search.next_page() {
+            let provider = self.search.provider;
+            let _ = self.jobs.tx.send(Job::Search { query, limit, provider });
+        }
     }
 
     pub fn set_search_source(&mut self, provider: Option<crate::provider::ProviderName>) {
-        if self.search.provider == provider {
-            return;
-        }
-        self.search.provider = provider;
-        self.search.results.clear();
-        self.search.error = None;
-        self.search.started = false;
-        if !self.search.query.trim().is_empty() {
+        if self.search.change_source(provider) && !self.search.query.trim().is_empty() {
             self.run_search();
         }
     }
@@ -3006,36 +2961,15 @@ impl App {
                     results,
                     error,
                 } => {
-                    if query != self.search.query.trim() || provider != self.search.provider {
+                    if !self.search.matches(&query, provider) {
                         continue;
                     }
-                    self.search.running = false;
-                    self.search.started = true;
-                    let more = std::mem::take(&mut self.search.more);
-                    match error {
-                        Some(message) if more => {
-                            self.search.exhausted = true;
-                            crate::logs::error(&message);
-                        }
-                        Some(message) => {
-                            self.search.error = Some(message.clone());
-                            self.search.results.clear();
+                    match self.search.receive(results, error) {
+                        crate::search_state::Outcome::Failed(message) if self.search.error.is_some() => {
                             self.fail(message, Some(ToastAction::Search));
                         }
-                        None if more => {
-                            let known: std::collections::HashSet<u64> = self.search.results.iter().map(|track| track.id).collect();
-                            let fresh: Vec<Track> = results.into_iter().filter(|track| !known.contains(&track.id)).collect();
-                            if fresh.is_empty() {
-                                self.search.exhausted = true;
-                            } else {
-                                self.search.results.extend(fresh);
-                            }
-                        }
-                        None => {
-                            self.search.error = None;
-                            self.search.exhausted = results.len() < SEARCH_PAGE;
-                            self.search.results = results;
-                        }
+                        crate::search_state::Outcome::Failed(message) => crate::logs::error(&message),
+                        crate::search_state::Outcome::Updated => {}
                     }
                 }
                 Event::Health { findings } => {

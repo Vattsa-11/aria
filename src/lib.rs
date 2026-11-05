@@ -43,6 +43,7 @@ mod queue;
 #[cfg(not(target_arch = "wasm32"))]
 mod radio;
 mod region;
+mod search_state;
 mod settings;
 mod sleep;
 mod stats;

@@ -21,13 +21,15 @@ cargo check --target wasm32-unknown-unknown
 If you changed anything the web build uses, also: `npm --prefix web run build:wasm` (about 2 minutes).
 
 ## Done so far
-- Step 1a: warming and radio state moved to `src/prefetch.rs`.
+- Step 1: warming and radio state moved to `src/prefetch.rs`.
   - `Warmup` (ready streams, requested ids) replaces `App.warm` and `App.warm_requested`.
   - `Radio` (`pending`, `append`, `tried`, `label`) replaces the four `radio_*` fields.
   - `warm_targets` and `warm_is_usable` moved there as `targets` and `is_usable`, with their tests.
 
+- Step 2: search paging moved to `src/search_state.rs` (`SearchState` with `begin`, `next_page`, `receive`, `change_source`, tests for merging and exhaustion).
+
 ## Remaining steps, in order
-1. Search paging: `SearchState` (in `app.rs`) plus `run_search`, `search_more`, and the `Event::Search` arm. Move to `src/search_state.rs`; keep the merge-without-reordering logic and add a test for it.
+1. (done) Search paging moved to `src/search_state.rs`.
 2. Sleep timer: already a type in `src/sleep.rs`. Move the `App` methods that drive it next to it.
 3. Listen meter: `src/listen.rs` exists. Move `count_listening` and `remember_position` into small functions that take a snapshot and return actions.
 4. UI-only state into one struct `UiState`: `queue_open`, `lyrics_open`, `now_playing_open`, `adding_songs`, `toast`, `toast_action`, `lyrics_paste`, `page`. Many UI files read these, so do it as a mechanical rename (`app.queue_open` to `app.ui.queue_open`) in its own commit.
