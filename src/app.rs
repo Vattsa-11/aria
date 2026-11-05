@@ -87,6 +87,8 @@ pub struct App {
     pub play_stack: crate::queue::PlayStack,
     going_back: bool,
     radio_pending: bool,
+    radio_append: bool,
+    radio_tried: Option<u64>,
     pub current: Option<Track>,
     pub current_origin: Option<TrackOrigin>,
     pub page: Page,
@@ -246,6 +248,8 @@ impl App {
             play_stack: crate::queue::PlayStack::default(),
             going_back: false,
             radio_pending: false,
+            radio_append: false,
+            radio_tried: None,
             current,
             current_origin: None,
             page: Page::Home,
@@ -745,6 +749,7 @@ impl App {
                         let video = self.current.as_ref().and_then(|track| track.yt_id());
                         let _ = self.jobs.tx.send(Job::Radio { seed, video });
                         self.radio_pending = true;
+                        self.radio_append = false;
                         self.notify("Queue finished - starting a radio mix");
                         self.persist(true);
                         return;
@@ -2761,6 +2766,29 @@ impl App {
         }
     }
 
+    fn prefetch_radio(&mut self) {
+        if !self.settings.autoplay || self.is_offline() || self.radio_pending || self.audio_state() != AudioState::Playing {
+            return;
+        }
+        if self.queue.has_following(true) || self.settings.repeat != RepeatMode::Off {
+            return;
+        }
+        let Some(id) = self.current.as_ref().map(|track| track.id) else {
+            return;
+        };
+        if self.radio_tried == Some(id) {
+            return;
+        }
+        let Some(seed) = self.radio_seed() else {
+            return;
+        };
+        self.radio_tried = Some(id);
+        let video = self.current.as_ref().and_then(|track| track.yt_id());
+        let _ = self.jobs.tx.send(Job::Radio { seed, video });
+        self.radio_pending = true;
+        self.radio_append = true;
+    }
+
     fn remember_position(&mut self) {
         if self.current.is_none() {
             return;
@@ -2778,6 +2806,7 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         self.sync_awake();
         self.remember_position();
+        self.prefetch_radio();
         self.count_listening();
         self.update_sleep_timer();
         self.maybe_crossfade();
@@ -3047,8 +3076,27 @@ impl App {
                 } => {
                     self.radio_pending = false;
                     if tracks.is_empty() {
+                        self.radio_append = false;
                         if let Some(message) = error {
                             crate::logs::error(&format!("Radio for {seed} failed: {message}"));
+                        }
+                    } else if std::mem::take(&mut self.radio_append) {
+                        let current = self.current.clone();
+                        let mut seen = std::collections::HashSet::new();
+                        let fresh: Vec<Track> = self
+                            .rank_for_pace(tracks)
+                            .into_iter()
+                            .filter(|track| {
+                                current.as_ref().is_none_or(|now| now.id != track.id && !now.title.eq_ignore_ascii_case(&track.title))
+                                    && seen.insert(track.title.to_lowercase())
+                            })
+                            .take(15)
+                            .collect();
+                        for track in fresh {
+                            self.queue.push_user(track);
+                        }
+                        if self.audio_state() == AudioState::Idle && self.queue.has_following(false) {
+                            self.play_advance(false);
                         }
                     } else {
                         let tracks = self.rank_for_pace(tracks);
