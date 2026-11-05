@@ -185,7 +185,7 @@ impl Graph {
         }
         self.embed = Some(Embed { track_id: request.track.id, duration: request.duration, ended_sent: false, error_sent: false });
         crate::install::call_with("ariaYTVolume", &format!("{}", (self.volume * 100.0).round()));
-        crate::install::call_with("ariaYTLoad", id);
+        crate::install::call_args("ariaYTLoad", &[id.into(), request.start.as_secs_f64().into()]);
     }
 
     fn embed_snapshot(&mut self) -> Option<Snapshot> {

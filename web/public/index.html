@@ -224,7 +224,8 @@ window.ariaApplyUpdate = () => location.reload();
       hideTimer = setTimeout(() => { const element = document.getElementById("aria-yt-box"); if (element && info.state === "paused") element.style.display = "none"; }, 1500);
     }
   };
-  window.ariaYTLoad = async (id) => {
+  window.ariaYTLoad = async (id, start) => {
+    const from = Math.max(0, Number(start) || 0);
     if (!/^[\w-]{6,20}$/.test(id)) return;
     box().style.display = "block";
     info.state = "buffering";
@@ -232,12 +233,12 @@ window.ariaApplyUpdate = () => location.reload();
     info.position = 0;
     info.duration = 0;
     await ready();
-    if (player && player.loadVideoById) { player.loadVideoById(id); return; }
+    if (player && player.loadVideoById) { player.loadVideoById({ videoId: id, startSeconds: from }); return; }
     player = new YT.Player("aria-yt-slot", {
       width: "100%",
       height: "100%",
       videoId: id,
-      playerVars: { autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1 },
+      playerVars: { autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1, start: Math.floor(from) },
       events: {
         onReady: (event) => { event.target.playVideo(); },
         onStateChange: (event) => { info.state = names[event.data] || info.state; settle(info.state); touch(); },

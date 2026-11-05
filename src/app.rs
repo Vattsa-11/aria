@@ -2592,7 +2592,7 @@ impl App {
     }
 
     pub fn persist(&mut self, immediate: bool) {
-        if !immediate && self.last_persist.elapsed() < Duration::from_secs(15) {
+        if !immediate && self.last_persist.elapsed() < Duration::from_secs(if cfg!(target_arch = "wasm32") { 3 } else { 15 }) {
             return;
         }
         self.last_persist = Instant::now();
