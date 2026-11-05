@@ -91,9 +91,7 @@ pub struct App {
     pub queue: Queue,
     pub play_stack: crate::queue::PlayStack,
     going_back: bool,
-    radio_pending: bool,
-    radio_append: bool,
-    radio_tried: Option<u64>,
+    radio: crate::prefetch::Radio,
     pub current: Option<Track>,
     pub current_origin: Option<TrackOrigin>,
     pub page: Page,
@@ -107,7 +105,7 @@ pub struct App {
     download_cancels: Vec<(u64, Arc<std::sync::atomic::AtomicBool>)>,
 
     pub delete_all: Option<(u8, usize, u64)>,
-    warm: std::collections::HashMap<u64, Warmed>,
+    warmup: crate::prefetch::Warmup,
     manual_fade: bool,
     pub trending: Vec<Track>,
     pub agent: Option<crate::agent::AgentHandle>,
@@ -130,11 +128,9 @@ pub struct App {
     features_checked: std::collections::HashSet<u64>,
     pub pace: crate::pace::Profile,
     pub mood: Option<crate::pace::Mood>,
-    radio_label: Option<String>,
     pub trending_loading: bool,
     pub trending_error: Option<String>,
     pub geo_loading: bool,
-    warm_requested: std::collections::HashSet<u64>,
     pub download_progress: std::collections::HashMap<u64, (u64, Option<u64>)>,
 
     pub online: bool,
@@ -259,9 +255,7 @@ impl App {
             queue,
             play_stack: crate::queue::PlayStack::default(),
             going_back: false,
-            radio_pending: false,
-            radio_append: false,
-            radio_tried: None,
+            radio: crate::prefetch::Radio::default(),
             current,
             current_origin: None,
             page: Page::Home,
@@ -272,7 +266,7 @@ impl App {
             downloading: Vec::new(),
             download_cancels: Vec::new(),
             delete_all: None,
-            warm: std::collections::HashMap::new(),
+            warmup: crate::prefetch::Warmup::default(),
             manual_fade: false,
             trending: Vec::new(),
             agent: None,
@@ -295,11 +289,9 @@ impl App {
             features_checked: std::collections::HashSet::new(),
             pace: crate::pace::Profile::empty(),
             mood: None,
-            radio_label: None,
             trending_loading: false,
             trending_error: None,
             geo_loading: false,
-            warm_requested: std::collections::HashSet::new(),
             download_progress: std::collections::HashMap::new(),
             online: true,
             probe_busy: false,
@@ -605,7 +597,7 @@ impl App {
                 })));
             }
             (true, None) => {
-                if let Some(warmed) = self.take_warm(track.id) {
+                if let Some(warmed) = self.warmup.take(track.id) {
                     let mut track = track;
                     track.provider_meta = Some(ProviderMeta {
                         provider: warmed.stream.provider,
@@ -770,8 +762,8 @@ impl App {
                     if let Some(seed) = self.radio_seed() {
                         let video = self.current.as_ref().and_then(|track| track.yt_id());
                         let _ = self.jobs.tx.send(Job::Radio { seed, video });
-                        self.radio_pending = true;
-                        self.radio_append = false;
+                        self.radio.pending = true;
+                        self.radio.append = false;
                         self.notify("Queue finished - starting a radio mix");
                         self.persist(true);
                         return;
@@ -1758,7 +1750,7 @@ impl App {
     }
 
     pub fn busy(&self) -> bool {
-        self.resolving || self.search.running || self.radio_pending || !self.downloading.is_empty()
+        self.resolving || self.search.running || self.radio.pending || !self.downloading.is_empty()
     }
 
     pub fn downloading_summary(&self) -> String {
@@ -1785,16 +1777,6 @@ impl App {
     pub fn current_art(&mut self) -> Option<egui::TextureHandle> {
         let track = self.current.clone()?;
         self.thumb(&track)
-    }
-
-    fn take_warm(&mut self, track_id: u64) -> Option<Warmed> {
-        let warmed = self.warm.remove(&track_id)?;
-        if warm_is_usable(warmed.track_id, track_id, warmed.at.elapsed()) {
-            warmed.http.resume_fill();
-            Some(warmed)
-        } else {
-            None
-        }
     }
 
     fn upcoming_tracks(&self, count: usize) -> Vec<Track> {
@@ -1828,7 +1810,7 @@ impl App {
             Some(next) => {
                 !next.is_online()
                     || self.download_path(next.id).is_some()
-                    || self.warm.contains_key(&next.id)
+                    || self.warmup.has(next.id)
             }
         }
     }
@@ -1839,7 +1821,7 @@ impl App {
             return;
         }
         for track in self.upcoming_tracks(2) {
-            if track.is_online() && self.download_path(track.id).is_none() && self.warm_requested.insert(track.id) {
+            if track.is_online() && self.download_path(track.id).is_none() && self.warmup.request(track.id) {
                 let _ = self.jobs.tx.send(Job::Warm { track });
             }
         }
@@ -1863,20 +1845,19 @@ impl App {
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if self.audio_state() != AudioState::Playing || self.is_offline() || self.position() < WARM_AFTER_SECS {
+        if self.audio_state() != AudioState::Playing || self.is_offline() || self.position() < crate::prefetch::AFTER_SECS {
             return;
         }
-        self.warm.retain(|_, warmed| warmed.at.elapsed() < WARM_MAX_AGE);
+        self.warmup.expire();
         let current = self.current.as_ref().map(|track| track.id);
-        let upcoming = self.upcoming_tracks(WARM_AHEAD);
+        let upcoming = self.upcoming_tracks(crate::prefetch::AHEAD);
         let candidates: Vec<(u64, bool)> = upcoming
             .iter()
             .map(|track| (track.id, !track.is_online() || self.download_path(track.id).is_some()))
             .collect();
-        let warmed: std::collections::HashSet<u64> = self.warm.keys().copied().collect();
-        for index in warm_targets(&candidates, &warmed, &self.warm_requested, current, WARM_IN_FLIGHT) {
+        for index in self.warmup.targets(&candidates, current) {
             let track = upcoming[index].clone();
-            self.warm_requested.insert(track.id);
+            self.warmup.request(track.id);
             let _ = self.jobs.tx.send(Job::Warm { track });
         }
     }
@@ -1961,8 +1942,8 @@ impl App {
             .map(crate::region::language_label)
             .unwrap_or("");
         let seed = format!("{} {}", mood.query(), language).trim().to_string();
-        self.radio_label = Some(format!("{} mix", mood.label()));
-        self.radio_pending = true;
+        self.radio.label = Some(format!("{} mix", mood.label()));
+        self.radio.pending = true;
         let _ = self.jobs.tx.send(Job::Radio { seed, video: None });
         self.notify(format!("Building a {} mix", mood.label().to_lowercase()));
     }
@@ -1974,7 +1955,7 @@ impl App {
         if !track.is_online() || self.is_offline() || self.download_path(track.id).is_some() {
             return;
         }
-        self.warm_requested.insert(track.id);
+        self.warmup.request(track.id);
         let _ = self.jobs.tx.send(Job::Warm { track });
     }
 
@@ -1998,9 +1979,9 @@ impl App {
         if self.is_offline() {
             return;
         }
-        self.radio_label = Some(format!("{artist} mix"));
-        self.radio_pending = true;
-        self.radio_append = false;
+        self.radio.label = Some(format!("{artist} mix"));
+        self.radio.pending = true;
+        self.radio.append = false;
         let _ = self.jobs.tx.send(Job::Radio { seed: artist.to_string(), video: None });
     }
 
@@ -2010,10 +1991,10 @@ impl App {
         }
         let picks: Vec<Track> = self.trending.iter().take(3).chain(self.history.iter().take(3)).cloned().collect();
         for track in picks {
-            if !track.is_online() || self.warm_requested.contains(&track.id) || self.download_path(track.id).is_some() {
+            if !track.is_online() || self.warmup.is_requested(track.id) || self.download_path(track.id).is_some() {
                 continue;
             }
-            self.warm_requested.insert(track.id);
+            self.warmup.request(track.id);
             let _ = self.jobs.tx.send(Job::Warm { track });
         }
     }
@@ -2946,7 +2927,7 @@ impl App {
     }
 
     fn prefetch_radio(&mut self) {
-        if !self.settings.autoplay || self.is_offline() || self.radio_pending || self.audio_state() != AudioState::Playing {
+        if !self.settings.autoplay || self.is_offline() || self.radio.pending || self.audio_state() != AudioState::Playing {
             return;
         }
         if self.queue.has_following(true) || self.settings.repeat != RepeatMode::Off {
@@ -2955,17 +2936,17 @@ impl App {
         let Some(id) = self.current.as_ref().map(|track| track.id) else {
             return;
         };
-        if self.radio_tried == Some(id) {
+        if self.radio.tried == Some(id) {
             return;
         }
         let Some(seed) = self.radio_seed() else {
             return;
         };
-        self.radio_tried = Some(id);
+        self.radio.tried = Some(id);
         let video = self.current.as_ref().and_then(|track| track.yt_id());
         let _ = self.jobs.tx.send(Job::Radio { seed, video });
-        self.radio_pending = true;
-        self.radio_append = true;
+        self.radio.pending = true;
+        self.radio.append = true;
     }
 
     fn remember_position(&mut self) {
@@ -3100,18 +3081,9 @@ impl App {
                     }
                 }
                 Event::Warmed { track_id, warmed } => {
-                    self.warm_requested.remove(&track_id);
+                    self.warmup.done(track_id);
                     if let Some((stream, http)) = warmed {
-                        self.warm.insert(track_id, Warmed { track_id, stream, http, at: Instant::now() });
-                        while self.warm.len() > WARM_KEEP {
-                            let oldest = self.warm.iter().min_by_key(|(_, warmed)| warmed.at).map(|(id, _)| *id);
-                            match oldest {
-                                Some(id) => {
-                                    self.warm.remove(&id);
-                                }
-                                None => break,
-                            }
-                        }
+                        self.warmup.store(crate::prefetch::Warmed { track_id, stream, http, at: Instant::now() });
                     }
                 }
                 Event::Resolved { gen, mut track, result } => {
@@ -3278,13 +3250,13 @@ impl App {
                     tracks,
                     error,
                 } => {
-                    self.radio_pending = false;
+                    self.radio.pending = false;
                     if tracks.is_empty() {
-                        self.radio_append = false;
+                        self.radio.append = false;
                         if let Some(message) = error {
                             crate::logs::error(&format!("Radio for {seed} failed: {message}"));
                         }
-                    } else if std::mem::take(&mut self.radio_append) {
+                    } else if std::mem::take(&mut self.radio.append) {
                         let current = self.current.clone();
                         let mut seen = std::collections::HashSet::new();
                         let fresh: Vec<Track> = self
@@ -3304,7 +3276,7 @@ impl App {
                         }
                     } else {
                         let tracks = self.rank_for_pace(tracks);
-                        let name = self.radio_label.take().unwrap_or_else(|| format!("{seed} radio"));
+                        let name = self.radio.label.take().unwrap_or_else(|| format!("{seed} radio"));
                         self.queue.set_context(tracks.clone(), name);
                         self.queue.mark_context_playing(0);
                         if let Some(track) = tracks.first().cloned() {
@@ -3483,50 +3455,11 @@ fn collect_audio_files(folder: &std::path::Path, depth: usize) -> Vec<PathBuf> {
     found
 }
 
-pub struct Warmed {
-    track_id: u64,
-    stream: crate::provider::ResolvedStream,
-    http: crate::http::HttpStream,
-    at: Instant,
-}
-
-const WARM_MAX_AGE: Duration = Duration::from_secs(15 * 60);
-const WARM_AFTER_SECS: f64 = 1.5;
-const WARM_AHEAD: usize = 6;
-const WARM_KEEP: usize = 6;
-const WARM_IN_FLIGHT: usize = 2;
-
 pub fn resume_position_ms(idle_with_track: bool, pending: Option<u64>, snapshot_ms: u64) -> u64 {
     match (idle_with_track, pending) {
         (true, Some(saved)) => saved,
         _ => snapshot_ms,
     }
-}
-
-pub fn warm_is_usable(warmed_id: u64, wanted_id: u64, age: Duration) -> bool {
-    warmed_id == wanted_id && age < WARM_MAX_AGE
-}
-
-pub fn warm_targets(
-    upcoming: &[(u64, bool)],
-    warmed: &std::collections::HashSet<u64>,
-    requested: &std::collections::HashSet<u64>,
-    current: Option<u64>,
-    in_flight_limit: usize,
-) -> Vec<usize> {
-    let mut budget = in_flight_limit.saturating_sub(requested.len());
-    let mut picks = Vec::new();
-    for (index, (id, local)) in upcoming.iter().enumerate() {
-        if budget == 0 {
-            break;
-        }
-        if *local || Some(*id) == current || warmed.contains(id) || requested.contains(id) {
-            continue;
-        }
-        picks.push(index);
-        budget -= 1;
-    }
-    picks
 }
 
 pub fn transition_secs(setting: f32, manual: bool) -> f32 {
@@ -3666,8 +3599,7 @@ mod state_tests {
         assert_eq!(super::handoff_window(0.0, false), 0.0);
     }
 
-    use super::{effective_state, resume_position_ms, transition_secs, warm_is_usable, warm_targets};
-    use std::time::Duration;
+    use super::{effective_state, resume_position_ms, transition_secs};
     use crate::player::AudioState;
 
     #[test]
@@ -3679,22 +3611,6 @@ mod state_tests {
     }
 
     #[test]
-    fn several_upcoming_songs_are_warmed_nearest_first_without_flooding() {
-        use std::collections::HashSet;
-        let upcoming = vec![(1, false), (2, true), (3, false), (4, false), (5, false)];
-        let none = HashSet::new();
-        assert_eq!(warm_targets(&upcoming, &none, &none, None, 2), vec![0, 2]);
-        let warmed: HashSet<u64> = [1].into_iter().collect();
-        assert_eq!(warm_targets(&upcoming, &warmed, &none, None, 2), vec![2, 3]);
-        let busy: HashSet<u64> = [3].into_iter().collect();
-        assert_eq!(warm_targets(&upcoming, &warmed, &busy, None, 2), vec![3]);
-        let full: HashSet<u64> = [3, 4].into_iter().collect();
-        assert!(warm_targets(&upcoming, &none, &full, None, 2).is_empty());
-        assert!(warm_targets(&upcoming, &none, &none, Some(1), 1) == vec![2]);
-        assert!(warm_targets(&[], &none, &none, None, 2).is_empty());
-    }
-
-    #[test]
     fn manual_skips_get_a_short_fade_and_automatic_ones_the_full_setting() {
         assert_eq!(transition_secs(0.0, false), 0.0);
         assert_eq!(transition_secs(0.0, true), 0.0);
@@ -3702,13 +3618,6 @@ mod state_tests {
         assert_eq!(transition_secs(4.0, true), 1.2);
         assert_eq!(transition_secs(0.8, true), 0.8);
         assert_eq!(transition_secs(30.0, false), 12.0);
-    }
-
-    #[test]
-    fn warmed_stream_must_match_the_track_and_be_fresh() {
-        assert!(warm_is_usable(5, 5, Duration::from_secs(60)));
-        assert!(!warm_is_usable(5, 6, Duration::from_secs(60)));
-        assert!(!warm_is_usable(5, 5, Duration::from_secs(16 * 60)));
     }
 
     #[test]

@@ -36,6 +36,7 @@ mod model;
 mod normalize;
 mod pace;
 mod platform;
+mod prefetch;
 mod player;
 mod proc;
 mod queue;
