@@ -44,6 +44,120 @@ pub fn token_path() -> PathBuf {
     agent_dir().join("token")
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Scope {
+    Read,
+    Control,
+    Destructive,
+}
+
+impl Scope {
+    pub fn label(self) -> &'static str {
+        match self {
+            Scope::Read => "read",
+            Scope::Control => "control",
+            Scope::Destructive => "destructive",
+        }
+    }
+}
+
+pub struct CommandInfo {
+    pub name: &'static str,
+    pub scope: Scope,
+    pub about: &'static str,
+    pub args: &'static [&'static str],
+}
+
+const fn cmd(name: &'static str, scope: Scope, about: &'static str, args: &'static [&'static str]) -> CommandInfo {
+    CommandInfo { name, scope, about, args }
+}
+
+use Scope::{Control, Destructive, Read as Reads};
+
+pub const COMMANDS: &[CommandInfo] = &[
+    cmd("ping", Reads, "Check the connection and get the app version", &[]),
+    cmd("state", Reads, "Full player, page and window state", &[]),
+    cmd("commands", Reads, "List every command with its scope and argument schema", &[]),
+    cmd("health", Reads, "Run live health checks (database, audio device, providers, latency, folders, updates, playback success); pass run:true to start a fresh run", &["run?:boolean"]),
+    cmd("history", Reads, "Recently played songs, newest first", &["limit?:number"]),
+    cmd("events", Reads, "Changes since a sequence number (track starts, errors); poll with the last seq you saw", &["since?:number"]),
+    cmd("audit", Reads, "Which agent commands ran recently and whether they worked", &["limit?:number"]),
+    cmd("play", Control, "Start or resume playback", &[]),
+    cmd("pause", Control, "Pause playback", &[]),
+    cmd("toggle", Control, "Toggle play and pause", &[]),
+    cmd("next", Control, "Skip to the next song", &[]),
+    cmd("prev", Control, "Go to the previous song or restart this one", &[]),
+    cmd("seek", Control, "Seek within the current song", &["secs:number"]),
+    cmd("volume", Control, "Set volume between 0 and 1", &["value:number"]),
+    cmd("like", Control, "Like or unlike the current song", &[]),
+    cmd("shuffle", Control, "Toggle shuffle", &[]),
+    cmd("repeat", Control, "Cycle repeat off, all, one", &[]),
+    cmd("navigate", Control, "Open a page: home, library, search, playlists, liked, history, stats, downloads, import, settings, more", &["page:string"]),
+    cmd("panel", Control, "Open or close queue, lyrics, now_playing or miniplayer", &["name:string", "open?:boolean"]),
+    cmd("search", Control, "Search for songs", &["query:string"]),
+    cmd("results", Reads, "Current search results", &[]),
+    cmd("play_result", Control, "Play a search result by index", &["index:number"]),
+    cmd("mood", Control, "Start a mood mix: chill, focus, workout, party, sad", &["name:string"]),
+    cmd("queue", Reads, "The current queue", &[]),
+    cmd("queue_add", Control, "Add a search result to the queue", &["index:number"]),
+    cmd("queue_remove", Destructive, "Remove a song from the queue", &["index:number"]),
+    cmd("queue_clear", Destructive, "Clear the queue", &[]),
+    cmd("playlists", Reads, "List playlists", &[]),
+    cmd("playlist", Reads, "Songs in one playlist", &["index:number"]),
+    cmd("playlist_create", Control, "Create a playlist", &["name:string"]),
+    cmd("playlist_add", Control, "Add a search result to a playlist", &["playlist:number", "result_index:number"]),
+    cmd("playlist_play", Control, "Play a playlist", &["index:number"]),
+    cmd("playlist_delete", Destructive, "Delete a playlist", &["index:number"]),
+    cmd("list", Reads, "List songs in a named collection such as liked, history or downloads", &["name?:string"]),
+    cmd("play_list", Control, "Play a named collection", &["name?:string", "index?:number"]),
+    cmd("download", Control, "Download a search result for offline use", &["index:number"]),
+    cmd("download_cancel", Control, "Cancel a download", &["id:number"]),
+    cmd("download_delete", Destructive, "Delete a downloaded file", &["id:number"]),
+    cmd("lyrics", Reads, "Lyrics for the current song", &[]),
+    cmd("lyrics_refresh", Control, "Fetch the lyrics again", &[]),
+    cmd("import_url", Control, "Import a playlist link", &["url:string"]),
+    cmd("region", Control, "Set the trending region", &["mode:string", "language?:string"]),
+    cmd("sleep", Control, "Set the sleep timer", &["minutes?:number"]),
+    cmd("settings", Reads, "All settings", &[]),
+    cmd("set_setting", Destructive, "Change a setting", &["key:string", "value:any"]),
+    cmd("window", Control, "Resize the main window", &["width:number", "height:number"]),
+    cmd("preview", Control, "Preview a width and height without resizing the window", &["width?:number", "height?:number"]),
+    cmd("layer_at", Reads, "Which layer is at a screen point", &["x:number", "y:number"]),
+    cmd("mini_size", Control, "Resize the miniplayer", &["width:number", "height:number"]),
+    cmd("live", Destructive, "Write live style overrides to disk", &["overrides?:object"]),
+    cmd("logs", Reads, "Recent log lines", &["count?:number"]),
+    cmd("diagnose", Reads, "Analyse the log for known problems", &[]),
+    cmd("screenshot", Reads, "Save a screenshot; viewport:\"mini\" for the miniplayer", &["viewport?:string"]),
+];
+
+pub fn scope_of(name: &str) -> Option<Scope> {
+    COMMANDS.iter().find(|info| info.name == name).map(|info| info.scope)
+}
+
+fn schema(args: &[&str]) -> Value {
+    let mut properties = serde_json::Map::new();
+    let mut required = Vec::new();
+    for arg in args {
+        let (name, kind) = arg.split_once(':').unwrap_or((arg, "string"));
+        let optional = name.ends_with('?');
+        let name = name.trim_end_matches('?');
+        properties.insert(name.to_string(), if kind == "any" { json!({}) } else { json!({ "type": kind }) });
+        if !optional {
+            required.push(name.to_string());
+        }
+    }
+    json!({ "type": "object", "properties": properties, "required": required })
+}
+
+pub fn describe() -> Value {
+    Value::Array(
+        COMMANDS
+            .iter()
+            .map(|info| json!({ "name": info.name, "scope": info.scope.label(), "description": info.about, "args": schema(info.args) }))
+            .collect(),
+    )
+}
+
 fn random_hex() -> String {
     let state = std::collections::hash_map::RandomState::new();
     let mut out = String::new();
@@ -289,5 +403,17 @@ mod tests {
         let reply: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(reply["ok"], false);
         assert!(reply["error"].as_str().unwrap().contains("token"));
+    }
+
+    #[test]
+    fn every_command_has_a_scope_and_destructive_ones_are_marked() {
+        assert_eq!(scope_of("state"), Some(Scope::Read));
+        assert_eq!(scope_of("next"), Some(Scope::Control));
+        assert_eq!(scope_of("queue_clear"), Some(Scope::Destructive));
+        assert_eq!(scope_of("nope"), None);
+        let described = describe();
+        let seek = described.as_array().unwrap().iter().find(|c| c["name"] == "seek").unwrap();
+        assert_eq!(seek["args"]["required"][0], "secs");
+        assert_eq!(seek["args"]["properties"]["secs"]["type"], "number");
     }
 }

@@ -113,6 +113,12 @@ pub struct App {
     pub agent: Option<crate::agent::AgentHandle>,
     pub agent_error: Option<String>,
     pub agent_findings: Vec<crate::doctor::Finding>,
+    pub health_running: bool,
+    play_ok: u32,
+    play_err: u32,
+    agent_audit: std::collections::VecDeque<(u64, String, bool)>,
+    agent_events: std::collections::VecDeque<(u64, u64, String, serde_json::Value)>,
+    agent_seq: u64,
     recent_errors: std::collections::VecDeque<String>,
     pub window_width: f32,
     live_watcher: crate::live::Watcher,
@@ -271,6 +277,12 @@ impl App {
             agent: None,
             agent_error: None,
             agent_findings: Vec::new(),
+            health_running: false,
+            play_ok: 0,
+            play_err: 0,
+            agent_audit: std::collections::VecDeque::new(),
+            agent_events: std::collections::VecDeque::new(),
+            agent_seq: 0,
             recent_errors: std::collections::VecDeque::new(),
             window_width: 0.0,
             live_watcher: crate::live::Watcher::default(),
@@ -2055,6 +2067,41 @@ impl App {
             crate::doctor::report_markdown(&findings),
         );
         self.agent_findings = findings;
+        self.run_health();
+    }
+
+    pub fn run_health(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.health_running {
+                return;
+            }
+            self.health_running = true;
+            let inputs = crate::health::Inputs { downloads_dir: crate::downloads::dir(), play_ok: self.play_ok, play_err: self.play_err };
+            let events = self.jobs.event_tx.clone();
+            let spawned = std::thread::Builder::new().name("aria-health".into()).spawn(move || {
+                let findings = crate::health::run(inputs);
+                let _ = events.send(Event::Health { findings });
+            });
+            if spawned.is_err() {
+                self.health_running = false;
+            }
+        }
+    }
+
+    fn now_ms() -> u64 {
+        web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    }
+
+    fn record_agent_event(&mut self, kind: &str, data: serde_json::Value) {
+        if self.agent.is_none() {
+            return;
+        }
+        self.agent_seq += 1;
+        self.agent_events.push_back((self.agent_seq, Self::now_ms(), kind.to_string(), data));
+        while self.agent_events.len() > 200 {
+            self.agent_events.pop_front();
+        }
     }
 
     fn poll_agent(&mut self, ctx: &egui::Context) {
@@ -2123,6 +2170,10 @@ impl App {
         let args = call.args.clone();
         let number = |key: &str| args.get(key).and_then(|value| value.as_f64());
         let text = |key: &str| args.get(key).and_then(|value| value.as_str()).map(str::to_string);
+        if crate::agent::scope_of(&call.cmd) == Some(crate::agent::Scope::Destructive) && !self.settings.agent_destructive {
+            let message = format!("\"{}\" is a destructive command. Turn on \"Allow destructive commands\" in Settings, Agent mode, to use it", call.cmd);
+            return self.agent_reply(call, Err(message));
+        }
         let result: Result<serde_json::Value, String> = match call.cmd.as_str() {
             "ping" => Ok(json!({ "pong": true, "version": env!("CARGO_PKG_VERSION") })),
             "state" => Ok(self.agent_state(ctx)),
@@ -2265,14 +2316,29 @@ impl App {
                     "report": crate::agent::agent_dir().join("doctor-report.md").display().to_string(),
                 }))
             }
-            "commands" => Ok(json!([
-                "ping", "state", "commands", "play", "pause", "toggle", "next", "prev", "seek", "volume", "like", "shuffle", "repeat",
-                "navigate", "panel", "search", "results", "play_result", "queue", "queue_add", "queue_remove", "queue_clear",
-                "playlists", "playlist", "playlist_create", "playlist_add", "playlist_play", "playlist_delete",
-                "list", "play_list", "download", "download_cancel", "download_delete", "lyrics", "lyrics_refresh",
-                "import_url", "region", "sleep", "mood", "settings", "set_setting", "window", "preview", "layer_at", "mini_size",
-                "logs", "diagnose", "screenshot"
-            ])),
+            "commands" => Ok(crate::agent::describe()),
+            "health" => {
+                if args.get("run").and_then(|value| value.as_bool()).unwrap_or(false) {
+                    self.run_health();
+                }
+                Ok(json!({
+                    "running": self.health_running,
+                    "findings": self.agent_findings.iter().map(|finding| finding.to_json()).collect::<Vec<_>>(),
+                }))
+            }
+            "history" => {
+                let limit = number("limit").map(|n| n as usize).unwrap_or(25).min(200);
+                Ok(json!(self.history.iter().take(limit).map(|t| json!({ "id": t.id, "title": t.title, "artist": t.artist, "duration": t.duration.map(|d| d.as_secs()) })).collect::<Vec<_>>()))
+            }
+            "events" => {
+                let since = number("since").map(|n| n as u64).unwrap_or(0);
+                let items: Vec<_> = self.agent_events.iter().filter(|(seq, ..)| *seq > since).map(|(seq, at, kind, data)| json!({ "seq": seq, "at_ms": at, "kind": kind, "data": data })).collect();
+                Ok(json!({ "latest": self.agent_seq, "events": items }))
+            }
+            "audit" => {
+                let limit = number("limit").map(|n| n as usize).unwrap_or(50).min(200);
+                Ok(json!(self.agent_audit.iter().rev().take(limit).map(|(at, cmd, ok)| json!({ "at_ms": at, "cmd": cmd, "ok": ok })).collect::<Vec<_>>()))
+            }
             "shuffle" => {
                 self.toggle_shuffle();
                 Ok(json!({ "shuffle": self.settings.shuffle }))
@@ -2584,7 +2650,13 @@ impl App {
         self.agent_reply(call, result);
     }
 
-    fn agent_reply(&self, call: crate::agent::Call, result: Result<serde_json::Value, String>) {
+    fn agent_reply(&mut self, call: crate::agent::Call, result: Result<serde_json::Value, String>) {
+        if !matches!(call.cmd.as_str(), "ping" | "audit" | "events") {
+            self.agent_audit.push_back((Self::now_ms(), call.cmd.clone(), result.is_ok()));
+            while self.agent_audit.len() > 200 {
+                self.agent_audit.pop_front();
+            }
+        }
         let value = match result {
             Ok(value) => value,
             Err(error) => serde_json::json!({ "error": error }),
@@ -2846,6 +2918,7 @@ impl App {
         let playing = self.is_playing();
         if self.listen.tick(track.id, playing, gap, self.duration()) {
             crate::db::log_play(&track);
+            self.play_ok += 1;
             self.stats_dirty = true;
         }
     }
@@ -2962,6 +3035,11 @@ impl App {
                         }
                     }
                 }
+                Event::Health { findings } => {
+                    self.health_running = false;
+                    self.agent_findings.retain(|finding| finding.severity != crate::doctor::Severity::Info || finding.detail.is_empty());
+                    self.agent_findings.extend(findings);
+                }
                 Event::Features { track_id, features } => {
                     self.features_checked.insert(track_id);
                     self.features.insert(track_id, features);
@@ -3019,9 +3097,14 @@ impl App {
                         continue;
                     }
                     self.resolving = false;
+                    if let Err(message) = &result {
+                        self.play_err += 1;
+                        self.record_agent_event("play_failed", serde_json::json!({ "id": track.id, "title": track.title, "error": message }));
+                    }
                     match result {
                         Ok(stream) => {
                             self.skip_streak = 0;
+                            self.record_agent_event("track_started", serde_json::json!({ "id": track.id, "title": track.title, "artist": track.artist }));
                             track.provider_meta = Some(ProviderMeta {
                                 provider: stream.provider,
                                 bitrate_kbps: stream.bitrate_kbps,
@@ -3282,7 +3365,11 @@ impl App {
                         self.play_advance(true);
                     }
                 }
-                Event::AudioError { message } => self.fail(message, None),
+                Event::AudioError { message } => {
+                    self.play_err += 1;
+                    self.record_agent_event("audio_error", serde_json::json!({ "message": message }));
+                    self.fail(message, None)
+                }
             }
         }
 

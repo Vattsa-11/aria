@@ -84,6 +84,7 @@ pub struct Settings {
     pub region_label: Option<String>,
     pub recent_searches: Vec<String>,
     pub agent_enabled: bool,
+    pub agent_destructive: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -138,6 +139,7 @@ impl Default for Settings {
             region_label: None,
             recent_searches: Vec::new(),
             agent_enabled: false,
+            agent_destructive: false,
         }
     }
 }

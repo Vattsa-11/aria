@@ -85,6 +85,11 @@ pub struct SavedState {
 
 static INITIALISED: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
 
+pub fn integrity() -> Result<String, String> {
+    let conn = open()?;
+    conn.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0)).map_err(|err| err.to_string())
+}
+
 fn open() -> Result<Connection, String> {
     #[cfg(target_arch = "wasm32")]
     let path = std::path::PathBuf::from("library.db");

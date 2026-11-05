@@ -9,6 +9,8 @@ mod embedded;
 mod net;
 mod equalizer;
 #[cfg(not(target_arch = "wasm32"))]
+mod health;
+#[cfg(not(target_arch = "wasm32"))]
 mod http;
 #[cfg(target_arch = "wasm32")]
 #[path = "web/http.rs"]

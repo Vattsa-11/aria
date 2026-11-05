@@ -43,6 +43,9 @@ pub enum Job {
 }
 
 pub enum Event {
+    Health {
+        findings: Vec<crate::doctor::Finding>,
+    },
     Lyrics {
         track_id: u64,
         result: Result<String, String>,

@@ -725,6 +725,16 @@ pub fn settings(app: &mut App, ui: &mut Ui) {
                         app.run_doctor();
                     }
                 });
+                ui.add_space(6.0);
+                let mut destructive = app.settings.agent_destructive;
+                if ui.checkbox(&mut destructive, "Allow destructive commands (clear queue, delete playlists or downloads, change settings)").changed() {
+                    app.settings.agent_destructive = destructive;
+                    app.touch_settings();
+                }
+                if app.health_running {
+                    ui.label(RichText::new("Running health checks…").size(12.0).color(pal.muted));
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(400));
+                }
                 if let Some(handle) = app.agent.as_ref() {
                     ui.add_space(6.0);
                     ui.label(

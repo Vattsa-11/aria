@@ -355,6 +355,7 @@ mod tests {
     #[test]
     fn user_queue_wins_over_shuffle_and_context_position_survives() {
         let mut queue = Queue::new(true, RepeatMode::Off);
+        queue.rng = 0x9E37_79B9_7F4A_7C15;
         queue.set_context(context(6), "Album");
         queue.mark_context_playing(2);
         queue.push_user(track("user-a"));
