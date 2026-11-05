@@ -124,6 +124,18 @@ async function route(request: Request, url: URL): Promise<Response> {
       const songs = await remembered(`search:${source}:${limit}:${query.toLowerCase()}`, 300, () => (source === "youtube" ? youtube.search(query, limit) : saavn.search(query, limit)));
       return json(songs, 200, "public, max-age=300");
     }
+    case "/api/playlist": {
+      const list = (url.searchParams.get("list") ?? "").trim();
+      if (!/^[\w-]{10,64}$/.test(list)) return json({ error: "That does not look like a playlist link" }, 400);
+      if (/^(RD|UL)/.test(list)) return json({ error: "Mix links are made fresh for each person and cannot be imported here. Use a saved playlist link instead." }, 400);
+      try {
+        const songs = await remembered(`playlist:${list}`, 600, () => youtube.playlist(list));
+        if (songs.length === 0) return json({ error: "No songs found. The playlist may be private or empty." }, 404);
+        return json(songs, 200, "public, max-age=600");
+      } catch (error) {
+        return json({ error: error instanceof Error ? error.message : "Could not read the playlist" }, 502);
+      }
+    }
     case "/api/trending": {
       const language = (url.searchParams.get("lang") ?? "hindi").replace(/[^a-z]/gi, "").slice(0, 20) || "hindi";
       return json(await remembered(`trending:${language}`, 900, () => saavn.trending(language)), 200, "public, max-age=900");

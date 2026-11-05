@@ -193,7 +193,10 @@ fn settings_path() -> PathBuf {
 
 #[cfg(target_arch = "wasm32")]
 pub fn load() -> Settings {
-    crate::storage::get("aria.settings").and_then(|raw| serde_json::from_str(&raw).ok()).unwrap_or_default()
+    crate::storage::get("aria.settings").and_then(|raw| serde_json::from_str::<Settings>(&raw).ok()).map(|mut settings| {
+        settings.eq = settings.eq.sanitized();
+        settings
+    }).unwrap_or_default()
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -209,7 +212,9 @@ pub fn load() -> Settings {
     let Ok(raw) = std::fs::read_to_string(&path) else {
         return Settings::default();
     };
-    serde_json::from_str(&raw).unwrap_or_default()
+    let mut settings: Settings = serde_json::from_str(&raw).unwrap_or_default();
+    settings.eq = settings.eq.sanitized();
+    settings
 }
 
 #[cfg(not(target_arch = "wasm32"))]

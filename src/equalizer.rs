@@ -95,7 +95,31 @@ impl Default for EqSettings {
     }
 }
 
+fn clean(value: f32, low: f32, high: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(low, high)
+    } else {
+        0.0
+    }
+}
+
 impl EqSettings {
+    pub fn sanitized(mut self) -> Self {
+        self.preamp = clean(self.preamp, MIN_PREAMP, MAX_PREAMP);
+        for gain in &mut self.gains {
+            *gain = clean(*gain, MIN_GAIN, MAX_GAIN);
+        }
+        self.custom.truncate(64);
+        for preset in &mut self.custom {
+            preset.name.truncate(60);
+            preset.preamp = clean(preset.preamp, MIN_PREAMP, MAX_PREAMP);
+            for gain in &mut preset.gains {
+                *gain = clean(*gain, MIN_GAIN, MAX_GAIN);
+            }
+        }
+        self
+    }
+
     pub fn apply_preset(&mut self, name: &str) {
         if let Some(preset) = PRESETS.iter().find(|preset| preset.name == name) {
             self.gains = preset.gains;
@@ -171,10 +195,12 @@ pub struct EqParams {
     preamp_db: AtomicU32,
     gains: [AtomicU32; BAND_COUNT],
     version: AtomicU64,
+    peak: AtomicU32,
 }
 
 impl EqParams {
     pub fn new(settings: &EqSettings) -> Arc<Self> {
+        let settings = &settings.clone().sanitized();
         Arc::new(Self {
             enabled: AtomicBool::new(settings.enabled),
             preamp_db: AtomicU32::new(settings.preamp.to_bits()),
@@ -182,10 +208,12 @@ impl EqParams {
                 AtomicU32::new(settings.gains[band].to_bits())
             }),
             version: AtomicU64::new(1),
+            peak: AtomicU32::new(0),
         })
     }
 
     pub fn apply(&self, settings: &EqSettings) {
+        let settings = &settings.clone().sanitized();
         self.enabled.store(settings.enabled, Ordering::Relaxed);
         self.preamp_db
             .store(settings.preamp.to_bits(), Ordering::Relaxed);
@@ -193,6 +221,17 @@ impl EqParams {
             self.gains[band].store(settings.gains[band].to_bits(), Ordering::Relaxed);
         }
         self.version.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn report_peak(&self, level: f32) {
+        let current = f32::from_bits(self.peak.load(Ordering::Relaxed));
+        if level > current {
+            self.peak.store(level.to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    pub fn take_peak(&self) -> f32 {
+        f32::from_bits(self.peak.swap(0, Ordering::Relaxed))
     }
 
     pub fn version(&self) -> u64 {
@@ -252,6 +291,14 @@ impl Biquad {
         }
     }
 
+    fn retune(&mut self, target: Self) {
+        self.b0 = target.b0;
+        self.b1 = target.b1;
+        self.b2 = target.b2;
+        self.a1 = target.a1;
+        self.a2 = target.a2;
+    }
+
     fn process(&mut self, x: f32) -> f32 {
         let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2
             - self.a1 * self.y1
@@ -281,6 +328,8 @@ pub struct EqSource<S> {
     version: u64,
     enabled: bool,
     preamp: f32,
+    preamp_target: f32,
+    limit: bool,
     channel: usize,
 }
 
@@ -298,9 +347,12 @@ impl<S: Source> EqSource<S> {
             version: 0,
             enabled: false,
             preamp: 1.0,
+            preamp_target: 1.0,
+            limit: false,
             channel: 0,
         };
         source.rebuild();
+        source.preamp = source.preamp_target;
         source
     }
 
@@ -308,24 +360,28 @@ impl<S: Source> EqSource<S> {
         let (enabled, preamp_db, gains) = self.params.snapshot();
         self.version = self.params.version();
         self.enabled = enabled;
-        self.preamp = 10f32.powf(preamp_db / 20.0);
-        self.filters = if enabled {
-            let layout = self.channels * BAND_COUNT;
-            let mut filters = Vec::with_capacity(layout);
-            for _channel in 0..self.channels {
-                for band in 0..BAND_COUNT {
-                    filters.push(Biquad::peaking(
-                        BAND_FREQS[band],
-                        BAND_Q,
-                        gains[band],
-                        self.sample_rate as f32,
-                    ));
+        self.preamp_target = 10f32.powf(clean(preamp_db, MIN_PREAMP, MAX_PREAMP) / 20.0);
+        self.limit = preamp_db > 0.05 || gains.iter().any(|gain| *gain > 0.05);
+        if !enabled {
+            self.filters.clear();
+            self.preamp = self.preamp_target;
+            return;
+        }
+        let fresh = self.filters.is_empty();
+        if fresh {
+            self.filters = vec![Biquad::default(); self.channels * BAND_COUNT];
+        }
+        for channel in 0..self.channels {
+            for band in 0..BAND_COUNT {
+                let target = Biquad::peaking(BAND_FREQS[band], BAND_Q, clean(gains[band], MIN_GAIN, MAX_GAIN), self.sample_rate as f32);
+                let slot = &mut self.filters[channel * BAND_COUNT + band];
+                if fresh {
+                    *slot = target;
+                } else {
+                    slot.retune(target);
                 }
             }
-            filters
-        } else {
-            Vec::new()
-        };
+        }
     }
 
     fn refresh(&mut self) {
@@ -348,6 +404,7 @@ impl<S: Source> Iterator for EqSource<S> {
         let channel = self.channel;
         self.channel = (self.channel + 1) % self.channels;
 
+        self.preamp += (self.preamp_target - self.preamp) * 0.002;
         let mut value = sample * self.preamp;
         let base = channel * BAND_COUNT;
         for band in 0..BAND_COUNT {
@@ -355,8 +412,21 @@ impl<S: Source> Iterator for EqSource<S> {
                 value = filter.process(value);
             }
         }
-        Some(value.clamp(-1.0, 1.0))
+        self.params.report_peak(value.abs());
+        Some(if self.limit { soft_limit(value) } else { value.clamp(-1.0, 1.0) })
     }
+}
+
+pub fn soft_limit(value: f32) -> f32 {
+    const KNEE: f32 = 0.8;
+    let level = value.abs();
+    if !level.is_finite() {
+        return 0.0;
+    }
+    if level <= KNEE {
+        return value;
+    }
+    value.signum() * (KNEE + (1.0 - KNEE) * ((level - KNEE) / (1.0 - KNEE)).tanh())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -479,6 +549,31 @@ mod tests {
             rms(&loud),
             rms(&quiet)
         );
+    }
+
+    #[test]
+    fn saved_settings_are_cleaned_of_bad_numbers() {
+        let mut settings = EqSettings { preamp: f32::NAN, ..EqSettings::default() };
+        settings.gains[0] = f32::INFINITY;
+        settings.gains[1] = 99.0;
+        settings.custom.push(EqPreset { name: "x".into(), gains: [f32::NEG_INFINITY; BAND_COUNT], preamp: 50.0 });
+        let clean = settings.sanitized();
+        assert_eq!(clean.preamp, 0.0);
+        assert_eq!(clean.gains[0], 0.0);
+        assert_eq!(clean.gains[1], MAX_GAIN);
+        assert_eq!(clean.custom[0].gains[3], 0.0);
+        assert_eq!(clean.custom[0].preamp, MAX_PREAMP);
+    }
+
+    #[test]
+    fn the_limiter_never_exceeds_full_scale_and_leaves_quiet_audio_alone() {
+        assert_eq!(soft_limit(0.5), 0.5);
+        assert_eq!(soft_limit(-0.7), -0.7);
+        for x in [0.9f32, 1.0, 2.0, 10.0, -10.0] {
+            assert!(soft_limit(x).abs() <= 1.0);
+        }
+        assert!(soft_limit(1.5) > soft_limit(1.0));
+        assert_eq!(soft_limit(f32::NAN), 0.0);
     }
 
     #[test]

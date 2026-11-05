@@ -938,6 +938,10 @@ fn equalizer_card(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette) {
                 app.settings.eq.preamp = preamp;
                 app.apply_eq();
             }
+            if app.settings.eq.enabled && app.eq.take_peak() > 1.0 {
+                ui.label(RichText::new("Peaks softened").size(12.0).color(Color32::from_rgb(230, 170, 60)));
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
                     .add_sized(

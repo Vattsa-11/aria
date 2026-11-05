@@ -234,6 +234,15 @@ async fn download_track(track: &Track, events: &Sender<Event>) -> Result<std::pa
     Ok(std::path::PathBuf::from(format!("offline/{id}")))
 }
 
+fn playlist_id(url: &str) -> Option<String> {
+    let query = url.split_once('?').map(|(_, rest)| rest).unwrap_or(url);
+    query
+        .split(['&', '#'])
+        .find_map(|pair| pair.strip_prefix("list="))
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
 async fn run(job: Job, events: Sender<Event>) {
     match job {
         Job::Search { query, provider, limit } => {
@@ -308,7 +317,16 @@ async fn run(job: Job, events: Sender<Event>) {
             tracks.truncate(5);
             emit(&events, Event::ImportMatch { token, index, tracks, error });
         }
-        Job::ImportPlaylist { token, .. } => emit(&events, Event::ImportPlaylist { token, tracks: Vec::new(), error: Some("Playlist links are not supported in the browser yet. Paste your songs as a list instead.".to_string()) }),
+        Job::ImportPlaylist { token, url } => {
+            let (tracks, error) = match playlist_id(&url) {
+                None => (Vec::new(), Some("That link has no playlist in it. Open the playlist on YouTube and copy its link (it contains list=...).".to_string())),
+                Some(id) => match get_json(&format!("/api/playlist?list={}", encode(&id))).await {
+                    Ok(json) => (tracks_from(&json), None),
+                    Err(err) => (Vec::new(), Some(err)),
+                },
+            };
+            emit(&events, Event::ImportPlaylist { token, tracks, error });
+        }
         Job::EnsureYtDlp | Job::DownloadYtDlp | Job::CheckUpdate | Job::DownloadUpdate { .. } => {}
     }
 }

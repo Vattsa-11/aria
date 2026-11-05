@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseClock, parseSearch, pickAudio } from "../src/youtube.ts";
+import { parseClock, parsePlaylist, parseSearch, pickAudio } from "../src/youtube.ts";
 import { boundedRange } from "../src/range.ts";
 
 const row = (id: string, title: string) => ({
@@ -38,4 +38,18 @@ test("open-ended ranges are bounded so YouTube does not throttle them", () => {
   assert.equal(boundedRange("bytes=2000000-"), "bytes=2000000-3048575");
   assert.equal(boundedRange("bytes=10-99"), "bytes=10-99");
   assert.equal(boundedRange("bytes=0-99999999"), "bytes=0-393215");
+});
+
+test("playlist videos are read from lockup entries", () => {
+  const entry = (id: string, title: string, channel: string, time: string) => ({
+    lockupViewModel: {
+      contentId: id,
+      contentType: "LOCKUP_CONTENT_TYPE_VIDEO",
+      contentImage: { thumbnailViewModel: { overlays: [{ thumbnailBottomOverlayViewModel: { badges: [{ thumbnailBadgeViewModel: { text: time } }] } }] } },
+      metadata: { lockupMetadataViewModel: { title: { content: title }, metadata: { contentMetadataViewModel: { metadataRows: [{ metadataParts: [{ text: { content: channel } }] }] } } } },
+    },
+  });
+  const songs = parsePlaylist({ contents: [entry("aaaaaaaaaaa", "Song A", "Artist A - Topic", "3:21"), entry("bbbbbbbbbbb", "", "x", "1:00")] });
+  assert.equal(songs.length, 1);
+  assert.deepEqual([songs[0].id, songs[0].title, songs[0].artist, songs[0].duration], ["aaaaaaaaaaa", "Song A", "Artist A", 201]);
 });

@@ -22,18 +22,14 @@ pub fn import(app: &mut App, ui: &mut egui::Ui) {
         );
         ui.add_space(12.0);
         ui.label(
-            RichText::new(if crate::platform::native_engine() { "Exportify CSV, a text list, or a playlist URL" } else { "Exportify CSV or a list of songs" })
+            RichText::new("Exportify CSV, a text list, or a YouTube playlist link")
                 .size(13.0)
                 .color(pal.muted),
         );
     });
     ui.add_space(10.0);
 
-    if !crate::platform::native_engine() {
-        if pill_button(ui, "Choose file", false, accent, &pal) {
-            app.import_file();
-        }
-    } else {
+    {
     if ui.available_width() < 560.0 {
         ui.add_sized(
             [ui.available_width(), 38.0],

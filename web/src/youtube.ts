@@ -108,6 +108,76 @@ export async function search(query: string, limit = 60): Promise<Song[]> {
   return walk.songs.slice(0, limit);
 }
 
+function lockups(node: unknown, found: Json[]): void {
+  if (Array.isArray(node)) {
+    node.forEach((child) => lockups(child, found));
+  } else if (node && typeof node === "object") {
+    const item = (node as Json).lockupViewModel;
+    if (item?.contentType === "LOCKUP_CONTENT_TYPE_VIDEO" && item.contentId) found.push(item);
+    else Object.values(node).forEach((child) => lockups(child, found));
+  }
+}
+
+function badgeText(node: unknown): string {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const text = badgeText(child);
+      if (text) return text;
+    }
+  } else if (node && typeof node === "object") {
+    const badge = (node as Json).thumbnailBadgeViewModel;
+    if (badge && typeof badge.text === "string" && /\d:\d\d/.test(badge.text)) return badge.text;
+    for (const child of Object.values(node)) {
+      const text = badgeText(child);
+      if (text) return text;
+    }
+  }
+  return "";
+}
+
+export function parsePlaylist(response: Json): Song[] {
+  const items: Json[] = [];
+  lockups(response, items);
+  return items.map((item) => {
+    const id = String(item.contentId);
+    const title = String(item.metadata?.lockupMetadataViewModel?.title?.content ?? "").trim();
+    const artist = String(item.metadata?.lockupMetadataViewModel?.metadata?.contentMetadataViewModel?.metadataRows?.[0]?.metadataParts?.[0]?.text?.content ?? "").replace(/ - Topic$/, "");
+    return { id, title, artist, duration: parseClock(badgeText(item.contentImage)), thumb: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`, source: "youtube" as const };
+  }).filter((song) => song.title);
+}
+
+function playlistToken(response: Json): string | null {
+  const text = JSON.stringify(response);
+  return /"continuationCommand":\{"token":"([^"]+)"/.exec(text)?.[1] ?? null;
+}
+
+const WEB_CLIENT = { client: { clientName: "WEB", clientVersion: "2.20250310.01.00", hl: "en", gl: "US" } };
+const BROWSE = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false";
+
+export async function playlist(id: string, limit = 200): Promise<Song[]> {
+  const songs: Song[] = [];
+  const seen = new Set<string>();
+  let body: Json = { context: WEB_CLIENT, browseId: `VL${id}` };
+  for (let page = 0; page < 4 && songs.length < limit; page++) {
+    const response = await fetch(BROWSE, { method: "POST", headers: { "Content-Type": "application/json", "User-Agent": SEARCH_HEADERS["User-Agent"] }, body: JSON.stringify(body) });
+    if (!response.ok) {
+      if (page === 0) throw new Error(`YouTube answered ${response.status} for this playlist`);
+      break;
+    }
+    const json: Json = await response.json();
+    for (const song of parsePlaylist(json)) {
+      if (!seen.has(song.id)) {
+        seen.add(song.id);
+        songs.push(song);
+      }
+    }
+    const token = playlistToken(json);
+    if (!token) break;
+    body = { context: WEB_CLIENT, continuation: token };
+  }
+  return songs.slice(0, limit);
+}
+
 const TTL_OK = 25 * 60_000;
 const TTL_REFUSED = 45_000;
 const memory = new Map<string, { url?: string; error?: string; until: number }>();
