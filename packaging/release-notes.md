@@ -4,7 +4,40 @@ Aria is a lightweight, touch-first music player. It plays your local files and s
 
 `yt-dlp` {{YTDLP}} is **bundled** in every download, so streaming works the first time you open the app. Nothing needs to be installed separately.
 
-## New in 1.0.3
+## New in 1.0.4
+
+**Playback**
+- **Music no longer stops when the queue runs out.** While your last song plays, Aria fetches similar songs and adds them to Up Next, so the next one starts straight away. Turn it off with *Settings, Autoplay*.
+- **Pause for as long as you like.** If the player was dropped while paused (common on phones), pressing play now continues from where you stopped instead of starting the song again.
+- **Gapless on phones:** songs now hand over without cutting off the last seconds.
+- **Music keeps playing with the screen off or the app in the background** in the web app on phones (lock-screen play, pause, next and previous work), and *Settings, Keep screen on* can hold the screen awake while music plays.
+- **Songs YouTube blocks for other apps** play in the official YouTube player inside Aria, which you can drag around, hide with *Hide*, and which hides itself when the song is paused. Aria still controls it (play, pause, seek, volume, queue). These songs cannot be downloaded.
+
+**Queue**
+- **Remove any upcoming song** with the cross on its row, including songs that came from a search, album or radio list, and use **Clear** to empty either list. Removing the song that is playing is not allowed.
+
+**Miniplayer (desktop)**
+- Fixed dragging the edges and corners: resizing no longer fights moving the window, and it now works with a finger or pen on Windows touch screens.
+- Fixed the close cross not reacting to a finger or pen tap.
+- The miniplayer remembers whether it was open and its size and position, and comes back the same way the next time you start Aria.
+
+**Web app**
+- **Import works in the browser:** paste a list of songs (one per line, such as `Kesariya - Arijit Singh`) or choose a CSV or text file, check the matches, then add them to a playlist.
+- **Home:** swipe a row of songs sideways to open *Show all*. Scrolling up and down is no longer blocked by the rows.
+- **Update banner:** when a new version is available the app tells you and updates on the next open.
+- The Import screen wraps properly on narrow screens.
+
+## How to use the new things
+
+1. **Radio after your queue:** just keep listening. When the last song in Up Next is playing, similar songs appear under Up Next within a few seconds.
+2. **Remove from the queue:** open the queue (the list button in the player), tap the cross on a song. *Clear* sits at the top of each list.
+3. **Miniplayer:** press the miniplayer button in the player bar. Drag anywhere to move it, drag an edge or corner to resize it, and use the cross at the top right to close it. Swipe left or right to change song and swipe up for Now Playing.
+4. **Install the web app:** open https://aria-web.sharmamagi0.workers.dev on your phone. On Android use *Install app*, on iPhone use Share, then *Add to Home Screen*. On a PC you can use it in the browser or install it from the address bar.
+5. **Import songs:** *More, Import*. Paste your list or choose a file, press *Find matches*, fix any wrong match with its alternatives, pick a playlist name and press *Add to playlist*. The desktop app also accepts Exportify CSVs and playlist links.
+6. **YouTube player songs on web:** if a song shows the YouTube player, use the buttons in Aria as usual. Press *Hide* to tuck the player away, and drag it by its top edge to move it.
+7. **Agent mode (desktop):** *Settings, Agent mode, On*. A program on the same computer can then control Aria with the token file shown on that card (`%APPDATA%\Aria\agent\token` on Windows) over `127.0.0.1:47474`. *Run diagnostics* checks your install. It is off by default and never listens on the network.
+
+## Earlier: new in 1.0.3
 
 - **Aria now runs in your browser too.** The same app, with the same screens, works as an installable web app on phones, tablets and PCs: https://aria-web.sharmamagi0.workers.dev. Your friends can use it without installing anything big, and a change to the app shows up on desktop and web together.
 - **Your Library:** one place for Liked Songs, Downloads, Recently played and your playlists, with filter chips that only appear when you have that kind of content, Recents or A-Z sorting, and a list or grid view.
