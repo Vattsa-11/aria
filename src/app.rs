@@ -529,7 +529,10 @@ impl App {
         self.pending_start_ms = None;
         let manual = std::mem::take(&mut self.manual_fade);
         let fade = if std::mem::take(&mut self.crossfade_arm) {
-            Duration::from_secs_f32(transition_secs(self.settings.crossfade, manual))
+            let base = transition_secs(self.settings.crossfade, manual);
+            let from = self.current.as_ref().and_then(|now| self.features.get(&now.id)).copied();
+            let to = self.features.get(&track.id).copied();
+            Duration::from_secs_f32(if manual { base } else { smart_fade(base, from, to) })
         } else {
             Duration::ZERO
         };
@@ -1776,7 +1779,10 @@ impl App {
     fn next_is_ready(&mut self) -> bool {
         #[cfg(target_arch = "wasm32")]
         {
-            return true;
+            return match self.next_preview() {
+                None => true,
+                Some(next) => !next.is_online() || self.download_path(next.id).is_some() || crate::jobs::peek_url(&next).is_some(),
+            };
         }
         #[cfg(not(target_arch = "wasm32"))]
         match self.next_preview() {
@@ -1785,6 +1791,18 @@ impl App {
                 !next.is_online()
                     || self.download_path(next.id).is_some()
                     || self.warm.contains_key(&next.id)
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn web_warm_next(&mut self) {
+        if self.audio_state() != AudioState::Playing || self.is_offline() {
+            return;
+        }
+        for track in self.upcoming_tracks(2) {
+            if track.is_online() && self.download_path(track.id).is_none() && self.warm_requested.insert(track.id) {
+                let _ = self.jobs.tx.send(Job::Warm { track });
             }
         }
     }
@@ -1802,9 +1820,11 @@ impl App {
     fn maybe_warm_next(&mut self) {
         #[cfg(target_arch = "wasm32")]
         {
+            self.web_warm_next();
             self.web_preload_next();
             return;
         }
+        #[cfg(not(target_arch = "wasm32"))]
         if self.audio_state() != AudioState::Playing || self.is_offline() || self.position() < WARM_AFTER_SECS {
             return;
         }
@@ -1918,6 +1938,46 @@ impl App {
         }
         self.warm_requested.insert(track.id);
         let _ = self.jobs.tx.send(Job::Warm { track });
+    }
+
+    pub fn top_artists(&self, limit: usize) -> Vec<(String, Track)> {
+        let mut counts: Vec<(String, usize, Track)> = Vec::new();
+        for track in self.liked.iter().chain(self.history.iter()) {
+            let artist = track.artist.trim();
+            if artist.is_empty() || !track.is_online() {
+                continue;
+            }
+            match counts.iter_mut().find(|(name, _, _)| name.eq_ignore_ascii_case(artist)) {
+                Some(entry) => entry.1 += 1,
+                None => counts.push((artist.to_string(), 1, track.clone())),
+            }
+        }
+        counts.sort_by_key(|entry| std::cmp::Reverse(entry.1));
+        counts.into_iter().take(limit).map(|(name, _, track)| (name, track)).collect()
+    }
+
+    pub fn play_artist_mix(&mut self, artist: &str) {
+        if self.is_offline() {
+            return;
+        }
+        self.radio_label = Some(format!("{artist} mix"));
+        self.radio_pending = true;
+        self.radio_append = false;
+        let _ = self.jobs.tx.send(Job::Radio { seed: artist.to_string(), video: None });
+    }
+
+    pub fn prefetch_home(&mut self) {
+        if self.is_offline() {
+            return;
+        }
+        let picks: Vec<Track> = self.trending.iter().take(3).chain(self.history.iter().take(3)).cloned().collect();
+        for track in picks {
+            if !track.is_online() || self.warm_requested.contains(&track.id) || self.download_path(track.id).is_some() {
+                continue;
+            }
+            self.warm_requested.insert(track.id);
+            let _ = self.jobs.tx.send(Job::Warm { track });
+        }
     }
 
     pub fn sync_agent(&mut self) {
@@ -3283,7 +3343,7 @@ pub struct Warmed {
 }
 
 const WARM_MAX_AGE: Duration = Duration::from_secs(15 * 60);
-const WARM_AFTER_SECS: f64 = 5.0;
+const WARM_AFTER_SECS: f64 = 1.5;
 const WARM_AHEAD: usize = 6;
 const WARM_KEEP: usize = 6;
 const WARM_IN_FLIGHT: usize = 2;
@@ -3328,6 +3388,17 @@ pub fn transition_secs(setting: f32, manual: bool) -> f32 {
         setting.min(1.2)
     } else {
         setting.clamp(0.0, 12.0)
+    }
+}
+
+pub fn smart_fade(base: f32, from: Option<crate::pace::Features>, to: Option<crate::pace::Features>) -> f32 {
+    match (from, to) {
+        (Some(a), Some(b)) => {
+            let jump = (a.energy - b.energy).abs();
+            let tempo = if a.bpm > 0.0 && b.bpm > 0.0 { (a.bpm - b.bpm).abs() / a.bpm.max(b.bpm) } else { 0.0 };
+            (base * (1.0 - jump * 1.2 - tempo * 0.5).clamp(0.4, 1.0)).max(1.5_f32.min(base))
+        }
+        _ => base,
     }
 }
 
@@ -3406,6 +3477,23 @@ impl eframe::App for App {
         theme::palette(self.settings.theme)
             .bg
             .to_normalized_gamma_f32()
+    }
+}
+
+#[cfg(test)]
+mod fade_tests {
+    use super::*;
+    use crate::pace::Features;
+
+    #[test]
+    fn similar_songs_keep_the_full_fade_and_big_jumps_shorten_it() {
+        let calm = Features { bpm: 90.0, energy: 0.3 };
+        let calm2 = Features { bpm: 92.0, energy: 0.32 };
+        let loud = Features { bpm: 150.0, energy: 0.9 };
+        assert!(smart_fade(6.0, Some(calm), Some(calm2)) > 5.4);
+        assert!(smart_fade(6.0, Some(calm), Some(loud)) < 3.0);
+        assert_eq!(smart_fade(6.0, None, Some(loud)), 6.0);
+        assert!(smart_fade(1.0, Some(calm), Some(loud)) <= 1.0);
     }
 }
 

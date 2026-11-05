@@ -256,7 +256,10 @@ async fn run(job: Job, events: Sender<Event>) {
             let result = resolve_url(&track).await.map(|(url, provider)| ResolvedStream { url, headers: Vec::new(), duration: track.duration, provider, bitrate_kbps: None });
             emit(&events, Event::Resolved { gen, track, result });
         }
-        Job::Warm { track } => emit(&events, Event::Warmed { track_id: track.id, warmed: None }),
+        Job::Warm { track } => {
+            let _ = resolve_url(&track).await;
+            emit(&events, Event::Warmed { track_id: track.id, warmed: None });
+        }
         Job::Probe => {
             let online = web_sys::window().map(|window| window.navigator().on_line()).unwrap_or(true);
             emit(&events, Event::Connectivity { online });

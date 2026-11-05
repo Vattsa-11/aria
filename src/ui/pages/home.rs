@@ -26,7 +26,7 @@ fn adapt_cards(ui: &egui::Ui) {
     CARD_BITS.store(width.to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Action {
     OpenLiked,
     OpenDownloads,
@@ -38,6 +38,7 @@ enum Action {
     PlayPick(PickSource),
     PlayLibrary(usize),
     PlayTrending(usize),
+    PlayArtist(String),
 }
 
 pub fn home(app: &mut App, ui: &mut egui::Ui) {
@@ -65,7 +66,9 @@ pub fn home(app: &mut App, ui: &mut egui::Ui) {
             ui.add_space(14.0);
 
             shortcut_grid(app, ui, &pal, accent, &mut actions);
+            app.prefetch_home();
             trending_section(app, ui, &pal, accent, &mut actions);
+            artist_mixes(app, ui, &pal, accent, &mut actions);
             mood_section(app, ui, &pal, accent);
 
             if !app.history.is_empty() {
@@ -187,6 +190,7 @@ pub fn home(app: &mut App, ui: &mut egui::Ui) {
             Action::PlayRecent(index) => app.play_history(index),
             Action::PlayLibrary(index) => app.play_library(index),
             Action::PlayTrending(index) => app.play_trending(index),
+            Action::PlayArtist(name) => app.play_artist_mix(&name),
             Action::PlayPick(PickSource::Liked(index)) => app.play_liked(index),
             Action::PlayPick(PickSource::Library(index)) => app.play_library(index),
         }
@@ -231,6 +235,23 @@ fn counts_line(liked: usize, local: usize, playlists: usize, downloads: usize) -
 
 fn greeting() -> &'static str {
     "Good to see you"
+}
+
+fn artist_mixes(app: &mut App, ui: &mut egui::Ui, pal: &Palette, accent: Color32, actions: &mut Vec<Action>) {
+    let artists = app.top_artists(6);
+    if artists.is_empty() {
+        return;
+    }
+    section(ui, "Your artists", pal);
+    ui.horizontal_wrapped(|ui| {
+        for (name, cover) in artists {
+            let art = app.thumb(&cover);
+            if card(ui, &name, "Artist mix", art.as_ref(), pal, accent) {
+                actions.push(Action::PlayArtist(name));
+            }
+        }
+    });
+    ui.add_space(10.0);
 }
 
 fn mood_section(app: &mut App, ui: &mut egui::Ui, pal: &Palette, accent: Color32) {
