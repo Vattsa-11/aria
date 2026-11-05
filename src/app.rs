@@ -114,6 +114,7 @@ pub struct App {
     pub agent_error: Option<String>,
     pub agent_findings: Vec<crate::doctor::Finding>,
     pub health_running: bool,
+    pub lyrics_paste: Option<String>,
     play_ok: u32,
     play_err: u32,
     agent_audit: std::collections::VecDeque<(u64, String, bool)>,
@@ -278,6 +279,7 @@ impl App {
             agent_error: None,
             agent_findings: Vec::new(),
             health_running: false,
+            lyrics_paste: None,
             play_ok: 0,
             play_err: 0,
             agent_audit: std::collections::VecDeque::new(),
@@ -2851,6 +2853,26 @@ impl App {
         }
     }
 
+    pub fn set_custom_lyrics(&mut self, body: &str) -> bool {
+        let Some(track) = self.current.clone() else {
+            return false;
+        };
+        let lines = crate::lyrics::parse_lyrics(body);
+        if lines.is_empty() {
+            self.notify("Those lyrics are empty");
+            return false;
+        }
+        let _ = crate::db::save_lyrics(track.id, body);
+        self.lyrics_track = Some(track.id);
+        self.lyrics_lines = lines;
+        self.lyrics_active = None;
+        self.lyrics_error = None;
+        self.lyrics_loading = false;
+        self.lyrics_paste = None;
+        self.notify("Lyrics saved for this song");
+        true
+    }
+
     pub fn refresh_lyrics(&mut self) {
         let Some(track) = self.current.clone() else {
             self.lyrics_lines.clear();
@@ -3238,9 +3260,9 @@ impl App {
                     self.lyrics_loading = false;
                     match result {
                         Ok(body) => {
-                            self.lyrics_lines = crate::lyrics::parse_lrc(&body);
+                            self.lyrics_lines = crate::lyrics::parse_lyrics(&body);
                             self.lyrics_error = if self.lyrics_lines.is_empty() {
-                                Some("No timed lyrics for this track".to_string())
+                                Some("No lyrics found for this track".to_string())
                             } else {
                                 None
                             };

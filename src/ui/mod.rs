@@ -1148,10 +1148,14 @@ fn lyrics_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, widt
                     app.lyrics_track = None;
                     app.refresh_lyrics();
                 }
+                ui.add_space(8.0);
+                lyrics_actions(app, ui, accent, pal);
                 return;
             }
             if app.lyrics_lines.is_empty() {
                 ui.label(RichText::new("No lyrics yet").size(13.5).color(pal.muted));
+                ui.add_space(8.0);
+                lyrics_actions(app, ui, accent, pal);
                 return;
             }
 
@@ -1160,7 +1164,7 @@ fn lyrics_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, widt
                 ui.spacing_mut().item_spacing.y = 8.0;
                 for (index, line) in app.lyrics_lines.iter().enumerate() {
                     let is_active = active == Some(index);
-                    let color = if is_active { accent } else { pal.muted };
+                    let color = if is_active { accent } else if crate::lyrics::is_timed(line) { pal.muted } else { pal.text };
                     let size = if is_active { 16.5 } else { 14.5 };
                     let response = ui.add(
                         egui::Label::new(RichText::new(&line.text).size(size).color(color))
@@ -1169,7 +1173,7 @@ fn lyrics_panel(app: &mut App, ui: &mut Ui, accent: Color32, pal: &Palette, widt
                     if is_active && app.lyrics_active != Some(index) {
                         response.scroll_to_me(Some(Align::Center));
                     }
-                    if response.clicked() {
+                    if response.clicked() && crate::lyrics::is_timed(line) {
                         seek_to = Some(line.at);
                     }
                 }
@@ -1594,5 +1598,36 @@ fn toast(ctx: &egui::Context, app: &mut App, accent: Color32, pal: &Palette) {
         });
     if retry {
         app.run_toast_action();
+    }
+}
+
+fn lyrics_actions(app: &mut App, ui: &mut egui::Ui, accent: Color32, pal: &Palette) {
+    ui.horizontal_wrapped(|ui| {
+        if widgets::pill_button(ui, "Paste lyrics", app.lyrics_paste.is_some(), accent, pal) {
+            app.lyrics_paste = if app.lyrics_paste.is_some() { None } else { Some(String::new()) };
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if widgets::pill_button(ui, "Choose .lrc or .txt file", false, accent, pal) {
+            if let Some(path) = crate::dialogs::pick_file("Lyrics", &["lrc", "txt"]) {
+                match std::fs::read_to_string(&path) {
+                    Ok(text) => {
+                        app.set_custom_lyrics(&text);
+                    }
+                    Err(err) => app.notify(format!("Could not read that file: {err}")),
+                }
+            }
+        }
+    });
+    let mut save = false;
+    if let Some(text) = app.lyrics_paste.as_mut() {
+        ui.add_space(8.0);
+        ui.add(egui::TextEdit::multiline(text).desired_rows(8).desired_width(f32::INFINITY).hint_text("Paste the lyrics here. Lines like [01:23.45] keep their timing."));
+        ui.add_space(6.0);
+        save = widgets::accent_button(ui, "Save lyrics", egui::vec2(140.0, 44.0), accent);
+    }
+    if save {
+        if let Some(text) = app.lyrics_paste.clone() {
+            app.set_custom_lyrics(&text);
+        }
     }
 }
