@@ -539,9 +539,12 @@ mod native {
     }
 }
 
-type ResizeStart = (egui::ResizeDirection, Rect, Pos2);
+type ResizeStart = (egui::ResizeDirection, Rect, Pos2, bool);
 
-fn screen_cursor(ui: &Ui, outer: Rect, local: Option<Pos2>) -> Option<Pos2> {
+fn screen_cursor(ui: &Ui, outer: Rect, local: Option<Pos2>, touch: bool) -> Option<Pos2> {
+    if touch {
+        return local.map(|pos| outer.min + pos.to_vec2());
+    }
     if let Some((x, y)) = native::cursor_pixels() {
         let scale = ui.ctx().pixels_per_point().max(0.01);
         return Some(egui::pos2(x / scale, y / scale));
@@ -552,13 +555,14 @@ fn screen_cursor(ui: &Ui, outer: Rect, local: Option<Pos2>) -> Option<Pos2> {
 fn resize_borders(ui: &mut Ui, rect: Rect, pal: &Palette) {
     use egui::ViewportCommand;
     let drag_id = ui.scope_id().with("mini-manual-resize");
-    let (press, latest, down, hover, outer) = ui.input(|input| {
+    let (press, latest, down, hover, outer, touching) = ui.input(|input| {
         (
             if input.pointer.primary_pressed() { input.pointer.press_origin() } else { None },
             input.pointer.latest_pos(),
             input.pointer.primary_down(),
             input.pointer.hover_pos(),
             input.viewport().outer_rect,
+            input.any_touches(),
         )
     });
 
@@ -567,9 +571,9 @@ fn resize_borders(ui: &mut Ui, rect: Rect, pal: &Palette) {
             let manual_all = cfg!(windows) && outer.is_some();
             if manual_all || is_manual(direction) {
                 let start_outer = outer.unwrap_or(rect);
-                let start_cursor = screen_cursor(ui, start_outer, Some(origin));
+                let start_cursor = screen_cursor(ui, start_outer, Some(origin), touching);
                 if let Some(start_cursor) = start_cursor {
-                    let start: ResizeStart = (direction, start_outer, start_cursor);
+                    let start: ResizeStart = (direction, start_outer, start_cursor, touching);
                     ui.data_mut(|data| data.insert_temp(drag_id, start));
                 }
             } else {
@@ -579,10 +583,10 @@ fn resize_borders(ui: &mut Ui, rect: Rect, pal: &Palette) {
     }
 
     let active: Option<ResizeStart> = ui.data(|data| data.get_temp(drag_id));
-    if let Some((direction, start_outer, start_cursor)) = active {
-        if down || native::left_button_down() {
+    if let Some((direction, start_outer, start_cursor, touch)) = active {
+        if down || (!touch && native::left_button_down()) {
             let current_outer = outer.unwrap_or(start_outer);
-            if let Some(cursor) = screen_cursor(ui, current_outer, latest) {
+            if let Some(cursor) = screen_cursor(ui, current_outer, latest, touch) {
                 let target = resize_rect(direction, start_outer, cursor - start_cursor);
                 if (target.min - current_outer.min).length() > 0.5 {
                     ui.ctx().send_viewport_cmd(ViewportCommand::OuterPosition(target.min));
@@ -622,7 +626,9 @@ fn resize_borders(ui: &mut Ui, rect: Rect, pal: &Palette) {
 fn background_drag(ui: &mut Ui, rect: Rect) {
 
     let response = ui.interact(rect, ui.scope_id().with("mini-bg"), Sense::drag());
-    if response.drag_started() {
+    let origin = ui.input(|input| input.pointer.press_origin());
+    let on_edge = origin.is_some_and(|pos| zone_at(rect, pos).is_some() || close_hit(rect).contains(pos));
+    if response.drag_started() && !on_edge {
         ui.ctx()
             .send_viewport_cmd(egui::ViewportCommand::StartDrag);
     }
@@ -644,7 +650,12 @@ fn close_button(app: &mut App, ui: &mut Ui, rect: Rect, accent: &Color32, pal: &
         Icon::Close,
         if active { *accent } else { pal.muted },
     );
-    if response.clicked() {
+    let tapped = ui.input(|input| {
+        input.pointer.any_released()
+            && input.pointer.interact_pos().is_some_and(|pos| hit.contains(pos))
+            && input.pointer.press_origin().is_none_or(|pos| hit.contains(pos))
+    });
+    if response.clicked() || tapped {
         let ctx = ui.ctx().clone();
         app.close_mini(&ctx);
     }

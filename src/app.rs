@@ -198,6 +198,7 @@ impl App {
         let ctx = cc.egui_ctx.clone();
         theme::install_fonts(&ctx);
         let mut settings = settings::load();
+        let mini_was_open = settings.mini.open;
         theme::apply(&ctx, &settings);
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -323,7 +324,10 @@ impl App {
             rename_buffer: String::new(),
             playlist_drag: crate::ui::pages::rows::DragState::default(),
             queue_drag: crate::ui::pages::rows::DragState::default(),
-            mini: crate::miniplayer::MiniState::default(),
+            mini: crate::miniplayer::MiniState {
+                open: cfg!(not(target_arch = "wasm32")) && mini_was_open,
+                ..Default::default()
+            },
             play_gen: 0,
             adding_songs: false,
             #[cfg(target_arch = "wasm32")]
@@ -518,6 +522,7 @@ impl App {
 
     pub fn start_track(&mut self, track: Track, origin: TrackOrigin, start: Duration) {
         self.skip_on_fail = false;
+        self.pending_start_ms = None;
         let manual = std::mem::take(&mut self.manual_fade);
         let fade = if std::mem::take(&mut self.crossfade_arm) {
             Duration::from_secs_f32(transition_secs(self.settings.crossfade, manual))
@@ -2559,6 +2564,7 @@ impl App {
 
     pub fn toggle_mini(&mut self) {
         self.mini.toggle();
+        self.settings.mini.open = self.mini.open;
         self.touch_settings();
     }
 
@@ -2575,6 +2581,7 @@ impl App {
 
     pub fn close_mini(&mut self, ctx: &egui::Context) {
         self.mini.close();
+        self.settings.mini.open = false;
         self.touch_settings();
         ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
     }
@@ -2754,9 +2761,23 @@ impl App {
         }
     }
 
+    fn remember_position(&mut self) {
+        if self.current.is_none() {
+            return;
+        }
+        let snapshot = self.player.snapshot();
+        if !matches!(snapshot.state, AudioState::Playing | AudioState::Paused) {
+            return;
+        }
+        let ms = snapshot.position.as_millis() as u64;
+        let near_end = snapshot.duration.is_some_and(|d| ms + 3_000 >= d.as_millis() as u64);
+        self.pending_start_ms = (ms > 1_000 && !near_end).then_some(ms);
+    }
+
     pub fn tick(&mut self) {
         #[cfg(target_arch = "wasm32")]
         self.sync_awake();
+        self.remember_position();
         self.count_listening();
         self.update_sleep_timer();
         self.maybe_crossfade();

@@ -93,6 +93,7 @@ pub struct MiniSettings {
     pub height: f32,
     pub x: Option<f32>,
     pub y: Option<f32>,
+    pub open: bool,
 }
 
 impl Default for MiniSettings {
@@ -102,6 +103,7 @@ impl Default for MiniSettings {
             height: 440.0,
             x: None,
             y: None,
+            open: false,
         }
     }
 }
