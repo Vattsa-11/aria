@@ -4,7 +4,54 @@ Aria is a lightweight, touch-first music player. It plays your local files and s
 
 `yt-dlp` {{YTDLP}} is **bundled** in every download, so streaming works the first time you open the app. Nothing needs to be installed separately.
 
-## New in 1.0.4
+## New in 1.0.5
+
+**Miniplayer (desktop)**
+- Rebuilt from scratch in three sizes: a slim bar, a medium card and a full card. They no longer fade into each other while you resize.
+- Fixed dragging the edges and corners (it used to fight with moving the window), fixed the close cross for finger and pen taps on Windows touch screens, and kept all controls clear of the resize edges.
+- Clicking the cover returns you to the main window; holding it likes the song; swipe left or right to change song.
+- It remembers whether it was open, and its size and position.
+
+**Search and suggestions**
+- **Endless search:** results load 15 at a time as you scroll, on desktop and web, instead of stopping after a handful.
+- **Your artists:** a new Home shelf with artist mixes built from the artists you play and like most.
+- **Songs prepared in advance:** the top trending and your most recent songs are looked up before you tap them, so they start faster.
+- **Suggestions never stop:** while the last song in your queue plays, Aria adds similar songs to Up Next, so there is no silence and no wait.
+
+**Transitions**
+- **The next song is prepared earlier** on desktop and web, and the crossfade waits until it is ready.
+- **Smart fade length:** the crossfade is shorter when the next song is much louder or at a very different tempo, and stays long when two songs are alike (only for songs Aria has analysed).
+- **Crossfade on phones** (Android and Chrome): songs now blend instead of cutting, while background playback keeps working. iPhone still switches songs without a fade.
+
+**Lyrics**
+- **Better matching:** titles are cleaned (no "Official Video", "From ..." or channel names), "Artist - Title" names are split, joined artists are tried one at a time, and the lyrics closest in length win.
+- **Untimed lyrics** now show instead of "No lyrics".
+- **Your own lyrics:** when none are found, use *Paste lyrics*, or on desktop *Choose .lrc or .txt file*. A `.lrc` file with the same name next to a local song is picked up automatically.
+
+**Import**
+- **YouTube playlist links work in the web app.** Paste a link that contains `list=...`. Mix links, private and empty playlists show a clear message.
+
+**Sound**
+- Equalizer settings are checked when loaded (bad numbers can no longer break playback), changing a band no longer clicks, and loud boosts are softened instead of clipped. A "Peaks softened" note appears next to the preamp when that happens.
+
+**Updates and safety**
+- Updates now come only from the Aria project on GitHub, and a download is installed only if it matches the SHA-256 checksum published with the release.
+- The audio engine reports a clear error if it cannot start and stops when the app closes. Shuffle is properly random.
+
+**Agent mode and health checks (desktop)**
+- *Settings, Agent mode, Run diagnostics* now also checks the database, audio device, YouTube Music, JioSaavn and GitHub reachability and speed, the downloads folder, update checksums and how many plays are failing.
+- Every agent command now has a description, a scope and an argument schema (`commands`). Destructive commands (clear the queue, delete playlists or downloads, change settings) are refused unless you tick *Allow destructive commands*. New commands: `health`, `history`, `events`, `audit`.
+
+## How to use the new things
+
+1. **Endless search:** search, then keep scrolling. More songs appear as you reach the bottom.
+2. **Artist mixes:** open Home and tap a card under *Your artists*.
+3. **Your own lyrics:** open the lyrics panel on a song with no lyrics, press *Paste lyrics*, paste, then *Save lyrics*. On desktop you can also press *Choose .lrc or .txt file*.
+4. **Import a YouTube playlist (web):** *More, Import*, paste the playlist link, press *Import URL*, review the matches, then *Add to playlist*.
+5. **Miniplayer:** press the miniplayer button in the player bar. Drag anywhere to move it, drag an edge or corner to resize it, tap the cross to close it.
+6. **Crossfade length:** *Settings, Equalizer and crossfade*. Set it to 0 for gapless playback without fading.
+
+## Earlier: new in 1.0.4
 
 **Playback**
 - **Music no longer stops when the queue runs out.** While your last song plays, Aria fetches similar songs and adds them to Up Next, so the next one starts straight away. Turn it off with *Settings, Autoplay*.
@@ -27,7 +74,7 @@ Aria is a lightweight, touch-first music player. It plays your local files and s
 - **Update banner:** when a new version is available the app tells you and updates on the next open.
 - The Import screen wraps properly on narrow screens.
 
-## How to use the new things
+## How to use the 1.0.4 things
 
 1. **Radio after your queue:** just keep listening. When the last song in Up Next is playing, similar songs appear under Up Next within a few seconds.
 2. **Remove from the queue:** open the queue (the list button in the player), tap the cross on a song. *Clear* sits at the top of each list.
