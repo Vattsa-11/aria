@@ -221,6 +221,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             draw_layout(MiniLayout::for_height(rect.height()), app, ui, rect, accent, &pal);
 
             resize_borders(ui, rect, &pal);
+            move_handle(ui, rect, &pal);
+            drive_move(ui);
             close_button(app, ui, rect, &accent, &pal);
             apply_opacity(app, ui, rect, outer_rect);
 
@@ -397,9 +399,13 @@ fn close_hit(rect: Rect) -> Rect {
     Rect::from_min_size(egui::pos2(rect.max.x - 34.0, rect.min.y), Vec2::splat(34.0))
 }
 
+fn move_hit(rect: Rect) -> Rect {
+    Rect::from_min_size(rect.min, Vec2::splat(34.0))
+}
+
 pub fn zone_at(rect: Rect, pos: Pos2) -> Option<egui::ResizeDirection> {
     use egui::ResizeDirection as D;
-    if !rect.contains(pos) || close_hit(rect).contains(pos) {
+    if !rect.contains(pos) || close_hit(rect).contains(pos) || move_hit(rect).contains(pos) {
         return None;
     }
     let left = pos.x - rect.min.x;
@@ -508,6 +514,7 @@ mod native {
 }
 
 type ResizeStart = (egui::ResizeDirection, Rect, Pos2, bool);
+type MoveStart = (Rect, Pos2, bool);
 
 fn screen_cursor(ui: &Ui, outer: Rect, local: Option<Pos2>, touch: bool) -> Option<Pos2> {
     if touch {
@@ -591,14 +598,99 @@ fn resize_borders(ui: &mut Ui, rect: Rect, pal: &Palette) {
     }
 }
 
-fn background_drag(ui: &mut Ui, rect: Rect) {
+fn move_drag_id(ui: &Ui) -> egui::Id {
+    ui.scope_id().with("mini-move-window")
+}
 
-    let response = ui.interact(rect, ui.scope_id().with("mini-bg"), Sense::drag());
-    let origin = ui.input(|input| input.pointer.press_origin());
-    let on_edge = origin.is_some_and(|pos| zone_at(rect, pos).is_some() || close_hit(rect).contains(pos));
-    if response.drag_started() && !on_edge {
+// Manual move on Windows, mirroring `resize_borders`: `ViewportCommand::StartDrag` goes
+// through Win32's caption modal loop (WM_NCLBUTTONDOWN/HTCAPTION), which is mouse-only and
+// never engages for touch/pen input (Surface Pro etc.). Track the drag start and move the
+// window with `OuterPosition` each frame instead.
+fn start_move(ui: &mut Ui, rect: Rect, origin: Option<Pos2>) {
+    let drag_id = move_drag_id(ui);
+    let (outer, touching) = ui.input(|input| (input.viewport().outer_rect, input.any_touches()));
+    if cfg!(windows) && outer.is_some() {
+        let start_outer = outer.unwrap_or(rect);
+        if let Some(start_cursor) = screen_cursor(ui, start_outer, origin, touching) {
+            let start: MoveStart = (start_outer, start_cursor, touching);
+            ui.data_mut(|data| data.insert_temp(drag_id, start));
+        }
+    } else {
         ui.ctx()
             .send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+}
+
+fn drive_move(ui: &mut Ui) {
+    let drag_id = move_drag_id(ui);
+    let (latest, down, outer, touching) = ui.input(|input| {
+        (
+            input.pointer.latest_pos(),
+            input.pointer.primary_down(),
+            input.viewport().outer_rect,
+            input.any_touches(),
+        )
+    });
+    let active: Option<MoveStart> = ui.data(|data| data.get_temp(drag_id));
+    if let Some((start_outer, start_cursor, touch)) = active {
+        let touch = touch || touching;
+        if down || (!touch && native::left_button_down()) {
+            let current_outer = outer.unwrap_or(start_outer);
+            if let Some(cursor) = screen_cursor(ui, current_outer, latest, touch) {
+                let target = start_outer.min + (cursor - start_cursor);
+                if (target - current_outer.min).length() > 0.5 {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::OuterPosition(target));
+                }
+            }
+            ui.ctx().request_repaint();
+        } else {
+            ui.data_mut(|data| data.remove::<MoveStart>(drag_id));
+        }
+    }
+}
+
+fn background_drag(ui: &mut Ui, rect: Rect) {
+    let response = ui.interact(rect, ui.scope_id().with("mini-bg"), Sense::drag());
+    let origin = ui.input(|input| {
+        if input.pointer.primary_pressed() {
+            input.pointer.press_origin()
+        } else {
+            None
+        }
+    });
+    let on_edge = origin.is_some_and(|pos| zone_at(rect, pos).is_some() || close_hit(rect).contains(pos));
+    if response.drag_started() && !on_edge {
+        start_move(ui, rect, origin);
+    }
+}
+
+fn move_handle(ui: &mut Ui, rect: Rect, pal: &Palette) {
+    let hit = move_hit(rect);
+    let button = Rect::from_center_size(hit.center(), Vec2::splat(26.0));
+    let response = ui.interact(hit, ui.scope_id().with("mini-move"), Sense::drag());
+    let active = response.hovered() || response.is_pointer_button_down_on();
+    ui.painter().rect_filled(
+        button,
+        CornerRadius::same(13),
+        if active { pal.raised } else { pal.bg.gamma_multiply(0.85) },
+    );
+    let dot = if active { pal.text } else { pal.muted };
+    for row in -1..=1 {
+        for col in [-1.0f32, 1.0] {
+            let center = button.center() + Vec2::new(col * 2.8, row as f32 * 3.0);
+            ui.painter().circle_filled(center, 1.35, dot);
+        }
+    }
+    if active {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
+    }
+    if ui.input(|input| input.pointer.primary_pressed()) {
+        if let Some(origin) = ui.input(|input| input.pointer.press_origin()) {
+            if hit.contains(origin) {
+                start_move(ui, rect, Some(origin));
+            }
+        }
     }
 }
 
@@ -1153,7 +1245,8 @@ mod tests {
         let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(340.0, 440.0));
         assert_eq!(zone_at(rect, pos2(330.0, 430.0)), Some(D::SouthEast));
         assert_eq!(zone_at(rect, pos2(313.0, 413.0)), Some(D::SouthEast));
-        assert_eq!(zone_at(rect, pos2(5.0, 5.0)), Some(D::NorthWest));
+        assert_eq!(zone_at(rect, pos2(5.0, 5.0)), None, "the move handle owns the top-left corner");
+        assert_eq!(zone_at(rect, pos2(5.0, 40.0)), Some(D::West));
         assert_eq!(zone_at(rect, pos2(5.0, 430.0)), Some(D::SouthWest));
         assert_eq!(zone_at(rect, pos2(170.0, 15.0)), Some(D::North));
         assert_eq!(zone_at(rect, pos2(170.0, 17.0)), None);
